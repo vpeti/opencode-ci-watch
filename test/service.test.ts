@@ -335,3 +335,26 @@ test("unwatch notifies state observers", async () => {
   assert.ok(h.changes.includes("ses_1"))
   assert.equal((await h.service.state("ses_1")).watches.length, 0)
 })
+
+test("the dashboard prefers a failed run over a newer skipped workflow", async () => {
+  const h = harness()
+  await h.service.watch("ses_1", { branch: "feature/login" })
+
+  const ci = normalizeDelivery(
+    "workflow_run",
+    workflowRunPayload({ id: 2001, name: "CI", conclusion: "failure", head_branch: "feature/login" }),
+  )
+  const auto = normalizeDelivery(
+    "workflow_run",
+    workflowRunPayload({ id: 2002, name: "Auto-merge", conclusion: "success", head_branch: "feature/login" }),
+  )
+  const jobDelivery = normalizeDelivery("workflow_job", workflowJobPayload({ run_id: 2001, head_branch: "feature/login" }))
+  assert.ok(ci && auto && jobDelivery)
+  await h.service.onDelivery(ci)
+  await h.service.onDelivery(auto)
+  await h.service.onDelivery(jobDelivery)
+
+  const state = await h.service.state("ses_1")
+  assert.equal(state.watches[0]?.run?.name, "CI")
+  assert.ok((state.watches[0]?.jobs.length ?? 0) > 0)
+})

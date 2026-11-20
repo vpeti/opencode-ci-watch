@@ -271,11 +271,30 @@ export class CiService {
     return `✅ ${describeTarget(target)} · ${this.summaryFor(target).replace(/^✅ /, "")}`
   }
 
-  private latestRun(target: Target): RunInfo | undefined {
-    const base = this.deps.cache
-    if (target.type === "branch") return base.forBranch(this.slug, target.value, 1)[0]
-    if (target.type === "sha") return base.forSha(this.slug, target.value, 1)[0]
-    return base.get(this.slug, Number(target.value))
+  /**
+   * The run the dashboard should show for a target. Several workflows can run for
+   * one commit (CI plus Auto-merge, for example); prefer the one with job data, then
+   * a failure, then the newest.
+   */
+  private displayRun(target: Target): RunInfo | undefined {
+    if (target.type === "run") return this.deps.cache.get(this.slug, Number(target.value))
+    const runs =
+      target.type === "branch"
+        ? this.deps.cache.forBranch(this.slug, target.value, 20)
+        : this.deps.cache.forSha(this.slug, target.value, 20)
+    if (runs.length === 0) return undefined
+    const newest = [...runs].sort(
+      (left, right) =>
+        (Date.parse(right.createdAt ?? "") || 0) - (Date.parse(left.createdAt ?? "") || 0) || right.id - left.id,
+    )[0]!
+    const forSha = runs.filter((run) => run.sha === newest.sha)
+    return [...forSha].sort((left, right) => {
+      if (isFailure(left) !== isFailure(right)) return isFailure(left) ? -1 : 1
+      const leftJobs = this.deps.jobs.forRun(left.id).length
+      const rightJobs = this.deps.jobs.forRun(right.id).length
+      if (leftJobs !== rightJobs) return rightJobs - leftJobs
+      return right.id - left.id
+    })[0]
   }
 
   // ---------------------------------------------------------------------------
@@ -362,7 +381,12 @@ export class CiService {
       const runs = await this.deps.enricher.recentRuns(target.value, 10)
       for (const run of runs) this.deps.cache.set(this.slug, run, this.now)
       const latest = runs[0]
-      if (latest && this.deps.jobs.forRun(latest.id).length === 0) await this.fetchJobs(latest)
+      if (latest) {
+        const forSha = runs.filter((run) => run.sha === latest.sha).slice(0, 4)
+        for (const run of forSha) {
+          if (this.deps.jobs.forRun(run.id).length === 0) await this.fetchJobs(run)
+        }
+      }
       const sessions = new Set(
         this.deps.store
           .list()
@@ -379,7 +403,12 @@ export class CiService {
       const runs = await this.deps.enricher.runsForSha(target.value, 10)
       for (const run of runs) this.deps.cache.set(this.slug, run, this.now)
       const latest = runs[0]
-      if (latest && this.deps.jobs.forRun(latest.id).length === 0) await this.fetchJobs(latest)
+      if (latest) {
+        const forSha = runs.filter((run) => run.sha === latest.sha).slice(0, 4)
+        for (const run of forSha) {
+          if (this.deps.jobs.forRun(run.id).length === 0) await this.fetchJobs(run)
+        }
+      }
       const sessions = new Set(
         this.deps.store
           .list()
@@ -424,7 +453,7 @@ export class CiService {
   /** Snapshot for the TUI dashboard. Optional fields are omitted so the RPC schema validates. */
   async state(sessionID: string): Promise<CiState> {
     const watches = this.deps.store.bySession(sessionID).map((subscription) => {
-      const run = this.latestRun(subscription.target)
+      const run = this.displayRun(subscription.target)
       const jobs = run
         ? this.deps.jobs.forRun(run.id).map((job) => ({
             id: job.id,
