@@ -227,6 +227,10 @@ function Sidebar(props: { sessionID: string }) {
       })
   })
   const failed = createMemo(() => watches().filter((watch) => overall(watch) === "failed").length)
+  createEffect(() => {
+    const list = watches()
+    debug(`render session=${props.sessionID} state=${state() ? "yes" : "no"} watches=${list.length} targets=${list.map((watch) => `${watch.target.type}:${watch.target.value}`).join(",")}`)
+  })
 
   if (error() && !state()) {
     return (
@@ -297,7 +301,7 @@ export default Plugin.define({
     }, SPIN_MS)
 
     context.ui.slot({
-      append: "sidebar.content",
+      prepend: "sidebar.content",
       render: (props) => {
         debug(`slot render session=${props.sessionID}`)
         return <Sidebar sessionID={props.sessionID} />
