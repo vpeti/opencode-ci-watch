@@ -6,6 +6,7 @@ import { Forwarder } from "./forwarder.js"
 import { listAccounts, resolveAccount } from "./github/accounts.js"
 import { Enricher } from "./github/enrich.js"
 import { Gh } from "./github/gh.js"
+import { DevHookTracker } from "./github/hooks.js"
 import { currentGitBranch, resolveRepo } from "./github/repo.js"
 import { startWebhookServer } from "./http.js"
 import { errorMessage, logger } from "./log.js"
@@ -106,6 +107,7 @@ export default Plugin.define({
         allowedEvents: EVENTS,
         log: logger,
         onDelivery: (event, id, payload) => {
+          if (process.env.CI_WATCH_DEBUG) logger.info("webhook", { event, id })
           const delivery = normalizeDelivery(event, payload)
           if (!delivery) return
           if (delivery.repo.slug !== repo.slug) {
@@ -125,6 +127,7 @@ export default Plugin.define({
       return
     }
 
+    const hooks = new DevHookTracker(gh, repo.slug, logger)
     const forwarder = new Forwarder({
       repo: repo.slug,
       url: `http://127.0.0.1:${server.port}/hook`,
@@ -133,6 +136,8 @@ export default Plugin.define({
       token,
       restartMax: config.forwarder.restartMax,
       log: logger,
+      beforeStart: () => hooks.snapshot(),
+      onAttached: () => hooks.adopt(),
     })
 
     const store = new SubscriptionStore(ctx.storage as unknown as StorageLike)
@@ -193,6 +198,7 @@ export default Plugin.define({
         await notifier.setStatus(sessionID, undefined)
       }
       await service.stop()
+      await hooks.removeOwned()
       await server.close()
       logger.info("stopped")
     }

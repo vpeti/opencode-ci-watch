@@ -12,6 +12,10 @@ export interface ForwarderOptions {
   readonly token?: string
   readonly restartMax: number
   readonly log: Logger
+  /** Runs before the child is spawned, for example to snapshot repository hooks. */
+  readonly beforeStart?: () => Promise<void> | void
+  /** Runs once the websocket is attached, for example to adopt the dev webhook it created. */
+  readonly onAttached?: () => Promise<void> | void
 }
 
 const BACKOFF_MS = [1_000, 5_000, 20_000, 60_000]
@@ -41,6 +45,7 @@ export class Forwarder {
   async start(): Promise<void> {
     if (this.child || this.stopping) return
     this.attempts = 0
+    await this.options.beforeStart?.()
     this.spawnChild()
   }
 
@@ -111,6 +116,9 @@ export class Forwarder {
       this.failure = undefined
       this.current = "running"
       this.options.log.info("webhook forwarder attached", { repo: this.options.repo })
+      void Promise.resolve(this.options.onAttached?.()).catch((error) => {
+        this.options.log.warn("attached hook callback failed", { error: String(error) })
+      })
       return
     }
     if (line.includes("you do not have access to this feature")) {

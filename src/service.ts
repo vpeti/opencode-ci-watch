@@ -507,6 +507,7 @@ export class CiService {
   }
 
   private async onPush(push: PushInfo): Promise<void> {
+    if (process.env.CI_WATCH_DEBUG) this.deps.log.info("push delivery", { branch: push.branch, subs: this.deps.store.list().length })
     for (const subscription of this.deps.store.list()) {
       if (!matchesPush(subscription, push)) continue
       await this.refreshStatus(subscription.sessionID)
@@ -523,6 +524,14 @@ export class CiService {
     this.deps.cache.set(this.slug, run, this.now)
 
     const subscriptions = this.deps.store.list().filter((subscription) => matchesRun(subscription, run))
+    if (process.env.CI_WATCH_DEBUG)
+      this.deps.log.info("run delivery", {
+        id: run.id,
+        status: run.status,
+        conclusion: run.conclusion,
+        attempt: run.attempt,
+        subs: subscriptions.length,
+      })
     const sessions = new Set(subscriptions.map((subscription) => subscription.sessionID))
     for (const sessionID of sessions) await this.refreshStatus(sessionID)
 
