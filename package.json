@@ -1,0 +1,35 @@
+{
+  "name": "opencode-ci-watch",
+  "version": "0.1.0",
+  "description": "OpenCode plugin: branch, commit and run scoped GitHub Actions watching without polling",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "github-actions",
+    "ci"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@opencode/plugin": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
