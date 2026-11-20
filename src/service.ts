@@ -78,6 +78,8 @@ export interface ServiceDeps {
   readonly greenSettleMs?: number
   /** Called after a subscription, run, job or merge changes so the TUI can refetch. */
   readonly onStateChanged?: (sessionID: string) => void
+  /** Cross-process claim so two plugin instances do not wake the same session twice. */
+  readonly ledger?: { claim(key: string): Promise<boolean> }
 }
 
 interface Waiter {
@@ -99,9 +101,8 @@ export class CiService {
   private readonly deps: ServiceDeps
   private readonly waiters = new Set<Waiter>()
   private readonly suppressed = new Map<string, Set<string>>()
-  private readonly notified = new Map<string, number>()
-  /** Pushes already handled, so a redelivered webhook cannot wake a session twice. */
-  private readonly pushed = new Map<string, number>()
+  /** Deliveries already handled here, so a redelivered webhook cannot wake twice. */
+  private readonly delivered = new Map<string, number>()
   private readonly greenTimers = new Map<string, NodeJS.Timeout>()
   private idleTimer: NodeJS.Timeout | undefined
 
@@ -310,10 +311,11 @@ export class CiService {
   private scheduleGreen(subscription: Subscription, sha: string): void {
     const key = `${subscription.id}:${sha}`
     if (this.greenTimers.has(key)) return
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
       this.greenTimers.delete(key)
       if (!this.settledFor(subscription.target, sha)) return
       if (!this.summaryFor(subscription.target).includes("passed")) return
+      if (await this.seen(`green:${subscription.id}:${sha}`)) return
       void this.deps.notifier.wake(
         subscription.sessionID,
         this.greenNotice(subscription.target),
@@ -758,10 +760,7 @@ export class CiService {
     if (process.env.CI_WATCH_DEBUG)
       this.deps.log.info("push delivery", { branch: push.branch, subs: this.deps.store.list().length })
     // GitHub can redeliver a hook, and the forwarder replays on reconnect.
-    const key = `${push.branch}:${push.after}`
-    if (this.pushed.has(key)) return
-    this.pushed.set(key, this.now)
-    this.trimPushed()
+    if (await this.seen(`push:${push.branch}:${push.after}`)) return
     const sessions = new Set<string>()
     for (const subscription of this.deps.store.list()) {
       const targets = subscription.target.type === "branch" && subscription.target.value === push.branch
@@ -831,10 +830,7 @@ export class CiService {
     else message = `${renderRunLine(run, this.now)}`
 
     for (const subscription of subscriptions) {
-      const dedupe = `${subscription.id}:${key}`
-      if (this.notified.has(dedupe)) continue
-      this.notified.set(dedupe, this.now)
-      this.trimNotified()
+      if (await this.seen(`run:${subscription.id}:${key}`)) continue
 
       const suppressed = this.isSuppressed(subscription.sessionID, subscription.target)
       if (!suppressed && isFailure(run) && subscription.notify !== "none" && message) {
@@ -874,25 +870,27 @@ export class CiService {
     }
   }
 
-  private trimPushed(): void {
-    if (this.pushed.size <= 500) return
-    const cutoff = this.now - DAY
-    for (const [key, at] of this.pushed) if (at < cutoff) this.pushed.delete(key)
-    while (this.pushed.size > 500) {
-      const oldest = this.pushed.keys().next().value
-      if (oldest === undefined) break
-      this.pushed.delete(oldest)
+  /** True when this delivery was already handled here or by another instance. */
+  private async seen(key: string): Promise<boolean> {
+    if (this.delivered.has(key)) return true
+    this.delivered.set(key, this.now)
+    this.trimDelivered()
+    if (!this.deps.ledger) return false
+    try {
+      return await this.deps.ledger.claim(key)
+    } catch {
+      return false
     }
   }
 
-  private trimNotified(): void {
-    if (this.notified.size <= 2000) return
+  private trimDelivered(): void {
+    if (this.delivered.size <= 2000) return
     const cutoff = this.now - DAY
-    for (const [key, at] of this.notified) if (at < cutoff) this.notified.delete(key)
-    while (this.notified.size > 2000) {
-      const oldest = this.notified.keys().next().value
+    for (const [key, at] of this.delivered) if (at < cutoff) this.delivered.delete(key)
+    while (this.delivered.size > 2000) {
+      const oldest = this.delivered.keys().next().value
       if (oldest === undefined) break
-      this.notified.delete(oldest)
+      this.delivered.delete(oldest)
     }
   }
 

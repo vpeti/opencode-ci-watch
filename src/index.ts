@@ -16,7 +16,7 @@ import { CiRpc } from "./rpc.ts"
 import { CiService } from "./service.ts"
 import { SKILL_CONTENT, SKILL_DESCRIPTION, SKILL_ID, SKILL_NAME, SKILL_PATH } from "./skill.ts"
 import { pushDirectory } from "./shell.ts"
-import { JobCache, RunCache, SubscriptionStore, type StorageLike } from "./store.ts"
+import { DeliveryLedger, JobCache, RunCache, SubscriptionStore, type StorageLike } from "./store.ts"
 import { registerTools } from "./tools.ts"
 
 const EVENTS = ["push", "workflow_run", "workflow_job", "pull_request"] as const
@@ -143,7 +143,8 @@ export default Plugin.define({
       onStopped: () => hooks.removeOwned(),
     })
 
-    const store = new SubscriptionStore(ctx.storage as unknown as StorageLike, repo.slug)
+    const storage = ctx.storage as unknown as StorageLike
+    const store = new SubscriptionStore(storage, repo.slug)
     const notifier = new Notifier(ctx.session as unknown as SessionApiLike, logger)
     const ci = new CiService({
       repo,
@@ -158,6 +159,7 @@ export default Plugin.define({
       log: logger,
       currentBranch: () => currentGitBranch(directory),
       onStateChanged: (sessionID) => emitState?.(sessionID),
+      ledger: new DeliveryLedger(storage, repo.slug),
     })
     service = ci
 

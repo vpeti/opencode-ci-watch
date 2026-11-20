@@ -227,3 +227,50 @@ export class JobCache {
     }
   }
 }
+
+const SEEN_PREFIX = "seen/"
+const SEEN_TTL = 24 * 60 * 60 * 1000
+
+/**
+ * Cross-process delivery ledger. Two opencode processes can load this plugin for
+ * the same repository (a long-running server plus the service), and their in-memory
+ * dedupe maps are independent, so the same push or green wake would reach a session
+ * once per process. Plugin storage is shared by plugin id, so a claim recorded there
+ * stops the duplicates.
+ */
+export class DeliveryLedger {
+  private readonly storage: StorageLike
+  private readonly repo: string
+  private readonly now: () => number
+  private readonly local = new Map<string, number>()
+
+  constructor(storage: StorageLike, repo: string, now: () => number = Date.now) {
+    this.storage = storage
+    this.repo = repo
+    this.now = now
+  }
+
+  /** True when another instance already handled this delivery key. */
+  async claim(key: string): Promise<boolean> {
+    const at = this.now()
+    const full = `${SEEN_PREFIX}${this.repo}/${key}`
+    try {
+      const existing = await this.storage.get(full)
+      if (isFresh(existing, at)) return true
+      await this.storage.set(full, { at })
+      return false
+    } catch {
+      // A broken ledger must never swallow a wake.
+      if (isFresh(this.local.get(full), at)) return true
+      this.local.set(full, at)
+      return false
+    }
+  }
+}
+
+function isFresh(value: unknown, at: number): boolean {
+  if (typeof value === "number") return at - value < SEEN_TTL
+  if (typeof value !== "object" || value === null) return false
+  const entry = value as Record<string, unknown>
+  return typeof entry.at === "number" && at - entry.at < SEEN_TTL
+}

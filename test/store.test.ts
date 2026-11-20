@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { RunCache, SubscriptionStore, type StorageLike } from "../src/store.ts"
+import { DeliveryLedger, RunCache, SubscriptionStore, type StorageLike } from "../src/store.ts"
 import { run } from "./helpers.ts"
 
 function memoryStorage(): StorageLike & { data: Map<string, unknown> } {
@@ -112,4 +112,23 @@ test("keeps subscriptions scoped to their repository", async () => {
   await widgets.load()
   assert.equal(widgets.list().length, 1)
   assert.equal(widgets.list()[0]?.repo, "acme/widgets")
+})
+
+test("the delivery ledger claims a key once across instances", async () => {
+  const storage = memoryStorage()
+  const first = new DeliveryLedger(storage, "acme/widgets", () => 1_000_000)
+  const second = new DeliveryLedger(storage, "acme/widgets", () => 1_000_000)
+
+  assert.equal(await first.claim("push:main:abc"), false)
+  assert.equal(await second.claim("push:main:abc"), true)
+  assert.equal(await first.claim("push:main:def"), false)
+})
+
+test("the delivery ledger forgets stale claims", async () => {
+  const storage = memoryStorage()
+  const ledger = new DeliveryLedger(storage, "acme/widgets", () => 1_000_000)
+  await ledger.claim("push:main:abc")
+
+  const later = new DeliveryLedger(storage, "acme/widgets", () => 1_000_000 + 25 * 60 * 60 * 1000)
+  assert.equal(await later.claim("push:main:abc"), false)
 })
