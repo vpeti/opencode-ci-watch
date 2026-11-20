@@ -224,22 +224,14 @@ function Sidebar() {
         )}
       </box>
       {view.open
-        ? watches().map((watch) => {
-            const attention = watch.checks.filter((check) => check.state === "fail" || check.state === "run")
-            // Few checks: list them all. Many: only the ones that need attention.
-            const listed = watch.checks.length <= 5 ? watch.checks : attention
-            return (
-              <box flexDirection="column">
-                <WatchLine watch={watch} />
-                {listed.slice(0, 4).map((check) => (
-                  <CheckLine check={check} indent={2} />
-                ))}
-                {listed.length > 4 ? (
-                  <text fg={context.theme.text.faint}>  … {listed.length - 4} more</text>
-                ) : null}
-              </box>
-            )
-          })
+        ? watches().map((watch) => (
+            <box flexDirection="column">
+              <WatchLine watch={watch} />
+              {watch.checks.map((check) => (
+                <CheckLine check={check} indent={2} />
+              ))}
+            </box>
+          ))
         : null}
     </box>
   )
