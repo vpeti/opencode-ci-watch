@@ -136,6 +136,14 @@ test transpiler in the dependency tree.
 
 `PLAN.md` is intentionally not tracked; it is a local design document.
 
+## Server RPC
+
+The server forwards `workflow_job` and `pull_request`, caches job state in workflow order, resolves
+the default branch, and exposes:
+
+- `ci.state({ sessionID })` → `{ defaultBranch, watches }` with the latest run, jobs and timestamps;
+- `ci.updated({ sessionID })` after a run, job, merge or subscription change.
+
 ## TUI
 
 `src/tui.tsx` renders a live CI section in the sidebar from `ci.state`:
