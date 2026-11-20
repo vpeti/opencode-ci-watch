@@ -272,14 +272,17 @@ export default Plugin.define({
   id: "ci",
   setup(context) {
     let lastSecond = Math.floor(Date.now() / 1000)
-    const stopTicks = context.renderer.onAnimationTick(8, (_delta, ticks) => {
-      setFrame(ticks)
+    // The renderer's animation clock only ticks while it is drawing, so a
+    // plugin-level subscriber can freeze between renders. A plain timer keeps
+    // the spinner and the clocks moving without holding renderer.idle() open.
+    const tick = setInterval(() => {
+      setFrame((value) => (value + 1) % SPINNER.length)
       const second = Math.floor(Date.now() / 1000)
       if (second !== lastSecond) {
         lastSecond = second
         setNow(Date.now())
       }
-    })
+    }, 125)
     let cursor = 0
     let hold = 0
     const timer = setInterval(() => {
@@ -289,18 +292,18 @@ export default Plugin.define({
         return
       }
       hold += 1
-      if (hold > 3) {
+      if (hold > 2) {
         hold = 0
         cursor = 0
         setDemo(initial())
       }
-    }, 1500)
+    }, 2000)
     context.ui.slot({
       append: "sidebar.content",
       render: () => <Sidebar />,
     })
     return () => {
-      stopTicks()
+      clearInterval(tick)
       clearInterval(timer)
     }
   },
