@@ -251,6 +251,7 @@ const SCRIPT: Array<{ at: number; run: () => void }> = [
 ]
 
 const CYCLE_SECONDS = 24
+const DEFAULT_BRANCH = "main"
 
 // ---------------------------------------------------------------------------
 // Components
@@ -302,9 +303,12 @@ function Sidebar() {
   const context = usePlugin()
   const [view, updateView] = context.storage.store("view", { initial: { open: true } })
   const watches = demo
-  // A merged branch lingers for five seconds, then its row is gone.
+  // The default branch leads. Rows stay for as long as the subscription exists;
+  // the UI only ages out the job list, never the branch itself.
   const visible = createMemo(() =>
-    watches().filter((watch) => !(watch.mergedAt !== undefined && now() - watch.mergedAt >= 5_000)),
+    [...watches()].sort((left, right) =>
+      left.branch === DEFAULT_BRANCH ? -1 : right.branch === DEFAULT_BRANCH ? 1 : 0,
+    ),
   )
   const failed = createMemo(() => visible().filter((watch) => overall(watch) === "failed").length)
 
