@@ -151,10 +151,6 @@ function counts(watch: Watch) {
   return value
 }
 
-function pad(value: string, width: number): string {
-  return value.length >= width ? value : `${value}${" ".repeat(width - value.length)}`
-}
-
 function WatchLine(props: { watch: Watch }) {
   const context = usePlugin()
   const state = overall(props.watch)
@@ -171,10 +167,16 @@ function WatchLine(props: { watch: Watch }) {
 function CheckLine(props: { check: Check }) {
   const context = usePlugin()
   return (
-    <box flexDirection="row" minWidth={0}>
-      <text fg={tone(context, props.check.state)}>{STATE[props.check.state].dot} </text>
-      <text fg={context.theme.text.muted}>{pad(props.check.name, 16)}</text>
-      <text fg={tone(context, props.check.state)}>{STATE[props.check.state].label}</text>
+    <box flexDirection="row" gap={1} minWidth={0}>
+      <text fg={tone(context, props.check.state)} flexShrink={0}>
+        {STATE[props.check.state].dot}
+      </text>
+      <text fg={context.theme.text.muted} wrapMode="none" truncate flexGrow={1} flexShrink={1} minWidth={0}>
+        {props.check.name}
+      </text>
+      <text fg={tone(context, props.check.state)} flexShrink={0}>
+        {STATE[props.check.state].label}
+      </text>
     </box>
   )
 }
