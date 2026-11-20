@@ -443,3 +443,15 @@ test("a sha without runs yet says so", async () => {
   assert.match(result.content, /no workflow runs yet/)
   assert.match(result.content, /GitHub may still be creating one/)
 })
+
+test("a redelivered push wakes only once", async () => {
+  const h = harness()
+  await h.service.watch("ses_1", { branch: "main", include: ["pushes"] })
+
+  const delivery = normalizeDelivery("push", pushPayload({ ref: "refs/heads/main" }))
+  assert.ok(delivery)
+  await h.service.onDelivery(delivery)
+  await h.service.onDelivery(delivery)
+
+  assert.equal(h.wakes.length, 1)
+})

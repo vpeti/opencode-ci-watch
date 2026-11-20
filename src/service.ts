@@ -100,6 +100,8 @@ export class CiService {
   private readonly waiters = new Set<Waiter>()
   private readonly suppressed = new Map<string, Set<string>>()
   private readonly notified = new Map<string, number>()
+  /** Pushes already handled, so a redelivered webhook cannot wake a session twice. */
+  private readonly pushed = new Map<string, number>()
   private readonly greenTimers = new Map<string, NodeJS.Timeout>()
   private idleTimer: NodeJS.Timeout | undefined
 
@@ -755,6 +757,11 @@ export class CiService {
   private async onPush(push: PushInfo): Promise<void> {
     if (process.env.CI_WATCH_DEBUG)
       this.deps.log.info("push delivery", { branch: push.branch, subs: this.deps.store.list().length })
+    // GitHub can redeliver a hook, and the forwarder replays on reconnect.
+    const key = `${push.branch}:${push.after}`
+    if (this.pushed.has(key)) return
+    this.pushed.set(key, this.now)
+    this.trimPushed()
     const sessions = new Set<string>()
     for (const subscription of this.deps.store.list()) {
       const targets = subscription.target.type === "branch" && subscription.target.value === push.branch
@@ -864,6 +871,17 @@ export class CiService {
       await this.deps.store.save({ ...subscription, mergedAt: this.now })
       await this.refreshStatus(subscription.sessionID)
       this.changed(subscription.sessionID)
+    }
+  }
+
+  private trimPushed(): void {
+    if (this.pushed.size <= 500) return
+    const cutoff = this.now - DAY
+    for (const [key, at] of this.pushed) if (at < cutoff) this.pushed.delete(key)
+    while (this.pushed.size > 500) {
+      const oldest = this.pushed.keys().next().value
+      if (oldest === undefined) break
+      this.pushed.delete(oldest)
     }
   }
 
