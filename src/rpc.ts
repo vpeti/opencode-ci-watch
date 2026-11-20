@@ -24,8 +24,10 @@ const run = {
     url: { type: "string" },
     startedAt: { type: "string" },
     finishedAt: { type: "string" },
+    jobCount: { type: "number" },
+    primary: { type: "boolean" },
   },
-  required: ["id", "name", "branch", "sha", "status", "conclusion", "url"],
+  required: ["id", "name", "branch", "sha", "status", "conclusion", "url", "jobCount", "primary"],
   additionalProperties: false,
 }
 
@@ -53,9 +55,10 @@ const watch = {
     merged: { type: "boolean" },
     mergedAt: { type: "number" },
     run,
+    runs: { type: "array", items: run },
     jobs: { type: "array", items: job },
   },
-  required: ["id", "target", "include", "notify", "merged", "jobs"],
+  required: ["id", "target", "include", "notify", "merged", "runs", "jobs"],
   additionalProperties: false,
 }
 

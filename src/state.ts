@@ -20,6 +20,8 @@ export interface CiRunState {
   readonly url: string
   readonly startedAt?: string
   readonly finishedAt?: string
+  readonly jobCount: number
+  readonly primary: boolean
 }
 
 export interface CiWatchState {
@@ -30,6 +32,7 @@ export interface CiWatchState {
   readonly merged: boolean
   readonly mergedAt?: number
   readonly run?: CiRunState
+  readonly runs: readonly CiRunState[]
   readonly jobs: readonly CiJobState[]
 }
 

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict"
 import type { JobInfo, RunInfo } from "../src/types.ts"
 
 export function run(overrides: Partial<RunInfo> = {}): RunInfo {
@@ -106,5 +107,17 @@ export function mergePayload(overrides: Record<string, unknown> = {}) {
       html_url: "https://github.com/acme/widgets/pull/42",
       ...overrides,
     },
+  }
+}
+
+/** The RPC schemas only accept strings for optional timestamps, so nulls must never reach them. */
+export function assertNoNulls(value: unknown, path = "value"): void {
+  if (value === null) assert.fail(`${path} is null`)
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => assertNoNulls(entry, `${path}[${index}]`))
+    return
+  }
+  if (typeof value === "object" && value !== undefined) {
+    for (const [key, entry] of Object.entries(value)) assertNoNulls(entry, `${path}.${key}`)
   }
 }

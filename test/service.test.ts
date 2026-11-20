@@ -7,7 +7,7 @@ import type { Forwarder } from "../src/forwarder.ts"
 import { CiService } from "../src/service.ts"
 import { JobCache, RunCache, SubscriptionStore, type StorageLike } from "../src/store.ts"
 import type { Logger } from "../src/types.ts"
-import { job, mergePayload, pushPayload, run, workflowJobPayload, workflowRunPayload } from "./helpers.ts"
+import { assertNoNulls, job, mergePayload, pushPayload, run, workflowJobPayload, workflowRunPayload } from "./helpers.ts"
 import { normalizeDelivery } from "../src/events.ts"
 
 const silent: Logger = { info() {}, warn() {}, error() {} }
@@ -153,7 +153,7 @@ test("a green run updates the status line without waking by default", async () =
   assert.ok(delivery)
   await h.service.onDelivery(delivery)
   assert.equal(h.wakes.length, 0)
-  assert.match(h.statuses.get("ses_1") ?? "", /✅ 1\/1 green/)
+  assert.match(h.statuses.get("ses_1") ?? "", /✅ 1 passed/)
 })
 
 test("notify: all wakes on success", async () => {
@@ -207,8 +207,9 @@ test("a quick green workflow does not hide a still-running one on the same commi
   await h.service.onDelivery(pending)
 
   const status = h.statuses.get("ses_1") ?? ""
-  assert.match(status, /⏳ 1 running/)
-  assert.doesNotMatch(status, /✅/)
+  assert.match(status, /○ 1 queued/)
+  assert.match(status, /✅ 1 passed/)
+  assert.doesNotMatch(status, /✅ 2 passed/)
   assert.match(status, new RegExp(sha.slice(0, 7)))
 })
 
@@ -230,7 +231,7 @@ test("notify.success makes the default subscription wait for every run to be gre
   await h.service.onDelivery(ci)
   await new Promise((resolve) => setTimeout(resolve, 5))
   assert.equal(h.wakes.length, 1)
-  assert.match(h.wakes[0]!.text, /^✅ main · 2\/2 green/)
+  assert.match(h.wakes[0]!.text, /^✅ main · 2 passed/)
 })
 
 test("a green run from an older commit does not wake after a newer push", async () => {
@@ -272,7 +273,7 @@ test("a green run from an older commit does not wake after a newer push", async 
   await h.service.onDelivery(newer)
   await new Promise((resolve) => setTimeout(resolve, 5))
   assert.equal(h.wakes.length, 1)
-  assert.match(h.wakes[0]!.text, /^✅ main · 1\/1 green/)
+  assert.match(h.wakes[0]!.text, /^✅ main · 1 passed/)
   assert.doesNotMatch(h.wakes[0]!.text, /⏳/)
 })
 
@@ -293,6 +294,8 @@ test("the dashboard state carries the run and its jobs", async () => {
   assert.equal(state.defaultBranch, "main")
   assert.equal(state.watches.length, 1)
   assert.equal(state.watches[0]?.run?.id, 1001)
+  assert.equal(state.watches[0]?.runs.length, 1)
+  assert.equal(state.watches[0]?.runs[0]?.primary, true)
   assert.equal(state.watches[0]?.jobs[0]?.name, "test")
   assert.equal(state.watches[0]?.jobs[0]?.startedAt, "2026-11-20T10:00:05Z")
   assert.ok(h.changes.includes("ses_1"))
@@ -356,5 +359,80 @@ test("the dashboard prefers a failed run over a newer skipped workflow", async (
 
   const state = await h.service.state("ses_1")
   assert.equal(state.watches[0]?.run?.name, "CI")
+  assert.equal(state.watches[0]?.runs.length, 2)
+  assert.equal(state.watches[0]?.runs[0]?.name, "CI")
+  assert.equal(state.watches[0]?.runs[0]?.primary, true)
+  assert.equal(state.watches[0]?.runs[1]?.name, "Auto-merge")
+  assert.equal(state.watches[0]?.runs[1]?.primary, false)
   assert.ok((state.watches[0]?.jobs.length ?? 0) > 0)
+})
+
+test("the dashboard ignores manual and scheduled runs on a branch", async () => {
+  const h = harness()
+  await h.service.watch("ses_1", { branch: "main" })
+
+  const manual = normalizeDelivery(
+    "workflow_run",
+    workflowRunPayload({ id: 3001, name: "Runner maintenance", event: "workflow_dispatch", conclusion: "success" }),
+  )
+  assert.ok(manual)
+  await h.service.onDelivery(manual)
+
+  const state = await h.service.state("ses_1")
+  assert.equal(state.watches[0]?.runs.length, 0)
+})
+
+test("the CI workflow stays primary and secondaries sort by name", async () => {
+  const h = harness()
+  await h.service.watch("ses_1", { branch: "main" })
+
+  const ci = normalizeDelivery("workflow_run", workflowRunPayload({ id: 4001, name: "CI", conclusion: "success" }))
+  const auto = normalizeDelivery(
+    "workflow_run",
+    workflowRunPayload({ id: 4002, name: "Auto-merge", conclusion: "success" }),
+  )
+  assert.ok(ci && auto)
+  await h.service.onDelivery(auto)
+  await h.service.onDelivery(ci)
+
+  const state = await h.service.state("ses_1")
+  assert.equal(state.watches[0]?.runs[0]?.name, "CI")
+  assert.equal(state.watches[0]?.runs[0]?.primary, true)
+  assert.equal(state.watches[0]?.runs[1]?.name, "Auto-merge")
+  assert.equal(state.watches[0]?.runs[1]?.primary, false)
+})
+
+test("a queued run with a running job reads as running", async () => {
+  const h = harness()
+  await h.service.watch("ses_1", { branch: "main" })
+
+  const runDelivery = normalizeDelivery(
+    "workflow_run",
+    workflowRunPayload({ id: 5000, name: "CI", status: "queued", conclusion: null }),
+  )
+  const jobDelivery = normalizeDelivery("workflow_job", workflowJobPayload({ run_id: 5000 }))
+  assert.ok(runDelivery && jobDelivery)
+  await h.service.onDelivery(runDelivery)
+  await h.service.onDelivery(jobDelivery)
+
+  const status = h.statuses.get("ses_1") ?? ""
+  assert.match(status, /⏳ 1 running/)
+  assert.doesNotMatch(status, /queued/)
+})
+
+test("the dashboard state omits null timestamps", async () => {
+  const h = harness()
+  await h.service.watch("ses_1", { branch: "main" })
+
+  const delivery = normalizeDelivery("workflow_run", workflowRunPayload({ id: 1001, name: "CI", conclusion: "success" }))
+  assert.ok(delivery)
+  await h.service.onDelivery(delivery)
+
+  // gh returns null for a timestamp the job has not reached; the cache must not leak it.
+  h.jobs.set({ ...job({ runId: 1001 }), startedAt: null, completedAt: null } as never, 1_000_000)
+
+  const state = await h.service.state("ses_1")
+  assertNoNulls(state)
+  assert.equal(state.watches[0]?.jobs[0]?.startedAt, undefined)
+  assert.equal(state.watches[0]?.jobs[0]?.completedAt, undefined)
 })

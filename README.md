@@ -93,8 +93,9 @@ How delivery works:
 
 - **failure** → synthetic message, waking an idle session (queued after the current step by
   default; `delivery: "steer"` injects into it)
-- **success** → one synthetic message once every run on the commit is green, the signal that the
-  work is done; `notify: "failures"` turns it into a status-line-only update
+- **success** → one synthetic message once every workflow on the head has finished and the primary
+  workflow passed (a cancelled primary never counts), the signal that the work is done;
+  `notify: "failures"` turns it into a status-line-only update
 - **push** → synthetic message, only for subscriptions with `include: ["pushes"]`
 - **forwarder broken** → one warning in the status line
 
@@ -141,18 +142,22 @@ test transpiler in the dependency tree.
 The server forwards `workflow_job` and `pull_request`, caches job state in workflow order, resolves
 the default branch, and exposes:
 
-- `ci.state({ sessionID })` → `{ defaultBranch, watches }` with the latest run, jobs and timestamps;
+- `ci.state({ sessionID })` → `{ defaultBranch, watches }`, where each watch carries `runs` for the
+  newest commit (`primary` marks the workflow the dashboard follows), the primary's `jobs`, and
+  timestamps;
 - `ci.updated({ sessionID })` after a run, job, merge or subscription change.
 
 ## TUI
 
 `src/tui.tsx` renders a live CI section in the sidebar from `ci.state`:
 
-- one row per branch subscription, with the default branch pinned first;
-- an overall state dot (waiting/running/done/failed) and, once running, the workflow timer;
-- every check with a grey name, a spinner while running, a timer and a right-aligned state label;
-- merged branches turn purple, drop their jobs, and stay until the subscription ends;
-- all-green branches collapse their jobs after five seconds but keep the row.
+- one row per branch subscription, with the default branch pinned first and an aggregate state dot;
+- one row per workflow on the newest commit, with its own status icon (spinner while running) and
+  timer, the primary workflow first and the others sorted by name; manual and scheduled workflows
+  are left out because they do not react to a push;
+- the primary workflow's jobs nested underneath, each with a status icon, timer and grey name;
+- merged branches turn purple, drop their contents, and stay until the subscription ends;
+- all-green branches collapse their jobs after five seconds but keep the branch and workflow rows.
 
 The section refreshes from the `ci.updated` RPC event, shows a short `CI no watches` state when
 nothing is subscribed, and stays hidden when the server plugin is unavailable.

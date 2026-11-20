@@ -11,9 +11,14 @@ interface JobPayload {
   status?: string
   conclusion?: string | null
   url?: string
-  startedAt?: string
-  completedAt?: string
+  startedAt?: string | null
+  completedAt?: string | null
   steps?: Array<{ name?: string; conclusion?: string | null }>
+}
+
+/** jq yields null for a timestamp the job has not reached; the RPC schema only accepts strings. */
+function time(value: string | null | undefined): string | undefined {
+  return typeof value === "string" && value !== "" ? value : undefined
 }
 
 export class Enricher {
@@ -44,8 +49,8 @@ export class Enricher {
         conclusion,
         url: job.url ?? "",
         steps: (job.steps ?? []).map((step) => ({ name: step.name ?? "step", conclusion: step.conclusion ?? null })),
-        startedAt: job.startedAt,
-        completedAt: job.completedAt,
+        startedAt: time(job.startedAt),
+        completedAt: time(job.completedAt),
       }
     })
   }

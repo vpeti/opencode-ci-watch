@@ -1,29 +1,31 @@
 import { createEffect, createMemo, createSignal, onCleanup, onMount, Show } from "solid-js"
 import { Plugin, usePlugin } from "@opencode/plugin/tui"
-import { CiRpc, type CiJobState, type CiState, type CiWatchState } from "./rpc.ts"
+import { CiRpc, type CiJobState, type CiRunState, type CiState, type CiWatchState } from "./rpc.ts"
 
 type CheckState = "pass" | "fail" | "run" | "queue" | "skip" | "cancel" | "neutral"
 
-const STATE: Record<
-  CheckState,
-  { dot: string; label: string; tone: "success" | "error" | "warning" | "muted" | "faint" }
-> = {
-  pass: { dot: "●", label: "Passed", tone: "success" },
-  fail: { dot: "●", label: "Failed", tone: "error" },
-  run: { dot: "●", label: "Running", tone: "warning" },
-  queue: { dot: "○", label: "Queued", tone: "warning" },
-  skip: { dot: "○", label: "Skipped", tone: "faint" },
-  cancel: { dot: "●", label: "Cancelled", tone: "muted" },
-  neutral: { dot: "●", label: "Neutral", tone: "muted" },
+const STATE: Record<CheckState, { icon: string; tone: "success" | "error" | "warning" | "muted" | "faint" }> = {
+  pass: { icon: "✓", tone: "success" },
+  fail: { icon: "✗", tone: "error" },
+  run: { icon: "●", tone: "warning" },
+  queue: { icon: "○", tone: "warning" },
+  skip: { icon: "»", tone: "faint" },
+  cancel: { icon: "⊘", tone: "muted" },
+  neutral: { icon: "·", tone: "muted" },
 }
 
-type Overall = "waiting" | "running" | "done" | "failed"
+function iconFor(state: CheckState): string {
+  return state === "run" ? (SPINNER[frame() % SPINNER.length] ?? STATE.run.icon) : STATE[state].icon
+}
+
+type Overall = "waiting" | "running" | "done" | "failed" | "canceled"
 
 const OVERALL: Record<Overall, { dot: string; tone: CheckState }> = {
-  waiting: { dot: "○", tone: "queue" },
-  running: { dot: "●", tone: "run" },
-  done: { dot: "●", tone: "pass" },
-  failed: { dot: "●", tone: "fail" },
+  waiting: { dot: "•", tone: "queue" },
+  running: { dot: "•", tone: "run" },
+  done: { dot: "•", tone: "pass" },
+  failed: { dot: "•", tone: "fail" },
+  canceled: { dot: "•", tone: "cancel" },
 }
 
 // GitHub's merged badge is purple.
@@ -72,32 +74,63 @@ function jobState(job: CiJobState): CheckState {
   return "queue"
 }
 
+function runsOf(watch: CiWatchState): readonly CiRunState[] {
+  if (watch.runs.length > 0) return watch.runs
+  return watch.run ? [watch.run] : []
+}
+
+function primaryOf(watch: CiWatchState): CiRunState | undefined {
+  const runs = runsOf(watch)
+  return runs.find((run) => run.primary) ?? runs[0] ?? watch.run
+}
+
+function runState(run: CiRunState): CheckState {
+  if (run.conclusion === "success") return "pass"
+  if (run.conclusion === "failure" || run.conclusion === "timed_out" || run.conclusion === "action_required")
+    return "fail"
+  if (run.conclusion === "cancelled") return "cancel"
+  if (run.conclusion === "skipped") return "skip"
+  if (run.conclusion === "neutral" || run.conclusion === "stale") return "neutral"
+  if (run.status === "queued" || run.status === "pending" || run.status === "waiting") return "queue"
+  if (run.status === "in_progress" || run.status === "requested") return "run"
+  return "queue"
+}
+
+/**
+ * GitHub reports a run as queued while some of its jobs already execute and the
+ * rest wait for a runner, so a busy job always promotes the run to running.
+ */
+function runDisplayState(run: CiRunState, jobs: readonly CiJobState[]): CheckState {
+  const state = runState(run)
+  if (state === "queue" && jobs.some((job) => jobState(job) === "run")) return "run"
+  return state
+}
+
 function overall(watch: CiWatchState): Overall {
-  const states = watch.jobs.map(jobState)
+  const runs = runsOf(watch)
+  const primary = primaryOf(watch)
+  const states = runs.map((run) => (run === primary ? runDisplayState(run, watch.jobs) : runState(run)))
   if (states.includes("fail")) return "failed"
   if (states.includes("run")) return "running"
   if (states.includes("queue")) return "waiting"
-  if (states.length > 0) return "done"
-
-  if (!watch.run) return "waiting"
-  if (watch.run.conclusion === "failure" || watch.run.conclusion === "timed_out" || watch.run.conclusion === "action_required")
-    return "failed"
-  if (watch.run.conclusion) return "done"
-  if (watch.run.status === "in_progress") return "running"
-  if (watch.run.status === "completed") return "done"
+  if (!primary) return "waiting"
+  const state = runDisplayState(primary, watch.jobs)
+  if (state === "pass") return "done"
+  if (state === "cancel" || state === "skip" || state === "neutral") return "canceled"
+  if (primary.status === "completed") return "done"
   return "waiting"
 }
 
 function jobsHidden(watch: CiWatchState, at: number): boolean {
   if (watch.merged) return true
-  const finished = parse(watch.run?.finishedAt)
+  const finished = parse(primaryOf(watch)?.finishedAt)
   return finished !== undefined && overall(watch) === "done" && at - finished >= 5_000
 }
 
-function elapsed(watch: CiWatchState, at: number): string | undefined {
-  const started = parse(watch.run?.startedAt)
+function runElapsed(run: CiRunState, at: number): string | undefined {
+  const started = parse(run.startedAt)
   if (started === undefined) return undefined
-  const finished = parse(watch.run?.finishedAt)
+  const finished = parse(run.finishedAt)
   return clock((finished ?? at) - started)
 }
 
@@ -111,7 +144,6 @@ function jobElapsed(job: CiJobState, at: number): string | undefined {
 function WatchLine(props: { watch: CiWatchState }) {
   const context = usePlugin()
   const state = createMemo(() => overall(props.watch))
-  const time = createMemo(() => elapsed(props.watch, now()))
   const color = () => (props.watch.merged ? MERGED : tone(context, OVERALL[state()].tone))
   return (
     <box flexDirection="row" gap={1} minWidth={0}>
@@ -120,6 +152,22 @@ function WatchLine(props: { watch: CiWatchState }) {
       </text>
       <text fg={context.theme.text.base} wrapMode="none" truncate flexGrow={1} flexShrink={1} minWidth={0}>
         <b>{props.watch.target.value}</b>
+      </text>
+    </box>
+  )
+}
+
+function CheckLine(props: { job: CiJobState }) {
+  const context = usePlugin()
+  const state = createMemo(() => jobState(props.job))
+  const time = createMemo(() => jobElapsed(props.job, now()))
+  return (
+    <box flexDirection="row" gap={1} minWidth={0} paddingLeft={2}>
+      <text fg={tone(context, state())} flexShrink={0}>
+        {iconFor(state())}
+      </text>
+      <text fg={context.theme.text.muted} wrapMode="none" truncate flexGrow={1} flexShrink={1} minWidth={0}>
+        {props.job.name}
       </text>
       {time() ? (
         <text fg={context.theme.text.muted} flexShrink={0}>
@@ -130,22 +178,23 @@ function WatchLine(props: { watch: CiWatchState }) {
   )
 }
 
-function CheckLine(props: { job: CiJobState }) {
+function WorkflowLine(props: { run: CiRunState; jobs: readonly CiJobState[] }) {
   const context = usePlugin()
-  const state = createMemo(() => jobState(props.job))
-  const time = createMemo(() => jobElapsed(props.job, now()))
+  const state = createMemo(() => runDisplayState(props.run, props.jobs))
+  const time = createMemo(() => runElapsed(props.run, now()))
   return (
     <box flexDirection="row" gap={1} minWidth={0}>
       <text fg={tone(context, state())} flexShrink={0}>
-        {state() === "run" ? SPINNER[frame() % SPINNER.length] : STATE[state()].dot}
+        {iconFor(state())}
       </text>
       <text fg={context.theme.text.muted} wrapMode="none" truncate flexGrow={1} flexShrink={1} minWidth={0}>
-        {props.job.name}
+        <b>{props.run.name}</b>
       </text>
-      <box flexDirection="row" gap={1} flexShrink={0}>
-        {time() ? <text fg={context.theme.text.muted}>{time()}</text> : null}
-        <text fg={tone(context, state())}>{STATE[state()].label}</text>
-      </box>
+      {time() ? (
+        <text fg={context.theme.text.muted} flexShrink={0}>
+          {time()}
+        </text>
+      ) : null}
     </box>
   )
 }
@@ -246,7 +295,17 @@ function Sidebar(props: { sessionID: string }) {
             ? watches().map((watch) => (
                 <box flexDirection="column">
                   <WatchLine watch={watch} />
-                  {jobsHidden(watch, now()) ? null : watch.jobs.map((job) => <CheckLine job={job} />)}
+                  {watch.merged ? null : (
+                    <box flexDirection="column">
+                      {primaryOf(watch) ? <WorkflowLine run={primaryOf(watch)!} jobs={watch.jobs} /> : null}
+                      {jobsHidden(watch, now()) ? null : watch.jobs.map((job) => <CheckLine job={job} />)}
+                      {runsOf(watch)
+                        .filter((run) => !run.primary)
+                        .map((run) => (
+                          <WorkflowLine run={run} jobs={[]} />
+                        ))}
+                    </box>
+                  )}
                 </box>
               ))
             : null}

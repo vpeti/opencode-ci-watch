@@ -210,44 +210,99 @@ export class CiService {
     return run ? [run] : []
   }
 
-  private newestRun(target: Target): RunInfo | undefined {
-    return [...this.cachedRuns(target)].sort(
+  /** All runs for the newest commit of a target, in no particular order. */
+  private newestRuns(target: Target): RunInfo[] {
+    if (target.type === "run") {
+      const run = this.deps.cache.get(this.slug, Number(target.value))
+      return run ? [run] : []
+    }
+    const runs = this.cachedRuns(target)
+    if (runs.length === 0) return []
+    const newest = [...runs].sort(
       (left, right) =>
         (Date.parse(right.createdAt ?? "") || 0) - (Date.parse(left.createdAt ?? "") || 0) || right.id - left.id,
-    )[0]
+    )[0]!
+    return runs.filter((run) => run.sha === newest.sha)
   }
 
-  /** Aggregates every run for the newest commit of a branch/sha, so one quick workflow cannot hide a pending one. */
+  /** Runs the dashboard shows: manual and scheduled workflows are not push/PR reactions. */
+  private dashboardRuns(target: Target): RunInfo[] {
+    const runs = this.newestRuns(target)
+    if (target.type === "run") return runs
+    return runs.filter((run) => run.event !== "workflow_dispatch" && run.event !== "schedule")
+  }
+
+  /**
+   * The workflow the dashboard treats as primary. The CI matrix is usually the run
+   * with the most jobs; failure wins a tie, then the newest run.
+   */
+  private primaryRun(runs: readonly RunInfo[]): RunInfo | undefined {
+    const ranked = [...runs].sort((left, right) => {
+      const leftJobs = this.deps.jobs.forRun(left.id).length
+      const rightJobs = this.deps.jobs.forRun(right.id).length
+      if (leftJobs !== rightJobs) return rightJobs - leftJobs
+      if (isFailure(left) !== isFailure(right)) return isFailure(left) ? -1 : 1
+      return right.id - left.id
+    })
+    // Pin the conventional CI workflow so hydration cannot flip the primary row.
+    return ranked.find((run) => run.name.trim().toLowerCase() === "ci") ?? ranked[0]
+  }
+
+  /**
+   * A run reads as running when GitHub says so or when one of its jobs is
+   * executing. GitHub reports a run as queued again when the remaining jobs wait
+   * for a runner, which would otherwise hide a busy workflow.
+   */
+  private isRunning(run: RunInfo): boolean {
+    if (isTerminal(run)) return false
+    if (run.status === "in_progress" || run.status === "requested") return true
+    return this.deps.jobs.forRun(run.id).some((job) => job.status === "in_progress")
+  }
+
+  /** Aggregates every run for the newest commit, with explicit labels for skipped and cancelled. */
   private summaryFor(target: Target): string {
     if (target.type === "run") {
       const run = this.deps.cache.get(this.slug, Number(target.value))
       return run ? `${conclusionEmoji(run.conclusion)} ${run.name} ${run.conclusion ?? run.status}` : "no run yet"
     }
-    const runs = this.cachedRuns(target)
+    const runs = this.dashboardRuns(target)
     if (runs.length === 0) return "no runs yet"
-    const newest = this.newestRun(target)
-    if (!newest) return "no runs yet"
-    const sha = newest.sha
-    const forSha = runs.filter((run) => run.sha === sha)
-    const running = forSha.filter((run) => !isTerminal(run)).length
-    const failed = forSha.filter(isFailure).length
-    const green = forSha.filter(isSuccess).length
+    const running = runs.filter((run) => this.isRunning(run)).length
+    const queued = runs.filter((run) => !isTerminal(run) && !this.isRunning(run)).length
+    const failed = runs.filter(isFailure).length
+    const passed = runs.filter(isSuccess).length
+    const skipped = runs.filter((run) => run.conclusion === "skipped").length
+    const cancelled = runs.filter((run) => run.conclusion === "cancelled").length
+    const other = runs.filter(
+      (run) =>
+        isTerminal(run) &&
+        !isFailure(run) &&
+        !isSuccess(run) &&
+        run.conclusion !== "skipped" &&
+        run.conclusion !== "cancelled",
+    ).length
     const parts: string[] = []
     if (running > 0) parts.push(`⏳ ${running} running`)
-    if (failed > 0) parts.push(`❌ ${failed}/${forSha.length} failed`)
-    if (running === 0 && failed === 0) parts.push(`✅ ${green}/${forSha.length} green`)
-    const label = sha ? ` · ${sha.slice(0, 7)}` : ""
-    return `${parts.join(" · ")}${label}`
+    if (queued > 0) parts.push(`○ ${queued} queued`)
+    if (failed > 0) parts.push(`❌ ${failed} failed`)
+    if (passed > 0) parts.push(`✅ ${passed} passed`)
+    if (skipped > 0) parts.push(`⏭ ${skipped} skipped`)
+    if (cancelled > 0) parts.push(`⊘ ${cancelled} cancelled`)
+    if (other > 0) parts.push(`⚪ ${other} other`)
+    const sha = runs[0]?.sha
+    return `${parts.join(" · ") || "no result"}${sha ? ` · ${sha.slice(0, 7)}` : ""}`
   }
 
-  /** True when this commit is the newest one being watched and every run on it finished without a failure. */
+  /** Green only when the newest commit is settled and its primary workflow succeeded. */
   private settledFor(target: Target, sha: string): boolean {
     if (target.type === "branch") {
-      const newest = this.newestRun(target)
+      const newest = this.newestRuns(target)[0]
       if (newest && newest.sha !== sha) return false
     }
-    const forSha = this.cachedRuns(target).filter((run) => run.sha === sha)
-    return forSha.length > 0 && forSha.every(isTerminal) && !forSha.some(isFailure)
+    const runs = this.newestRuns(target).filter((run) => run.sha === sha)
+    if (runs.length === 0 || !runs.every(isTerminal) || runs.some(isFailure)) return false
+    const primary = this.primaryRun(runs)
+    return primary !== undefined && isSuccess(primary)
   }
 
   private scheduleGreen(subscription: Subscription, sha: string): void {
@@ -256,7 +311,7 @@ export class CiService {
     const timer = setTimeout(() => {
       this.greenTimers.delete(key)
       if (!this.settledFor(subscription.target, sha)) return
-      if (!this.summaryFor(subscription.target).startsWith("✅")) return
+      if (!this.summaryFor(subscription.target).includes("passed")) return
       void this.deps.notifier.wake(
         subscription.sessionID,
         this.greenNotice(subscription.target),
@@ -271,30 +326,20 @@ export class CiService {
     return `✅ ${describeTarget(target)} · ${this.summaryFor(target).replace(/^✅ /, "")}`
   }
 
-  /**
-   * The run the dashboard should show for a target. Several workflows can run for
-   * one commit (CI plus Auto-merge, for example); prefer the one with job data, then
-   * a failure, then the newest.
-   */
-  private displayRun(target: Target): RunInfo | undefined {
-    if (target.type === "run") return this.deps.cache.get(this.slug, Number(target.value))
-    const runs =
-      target.type === "branch"
-        ? this.deps.cache.forBranch(this.slug, target.value, 20)
-        : this.deps.cache.forSha(this.slug, target.value, 20)
-    if (runs.length === 0) return undefined
-    const newest = [...runs].sort(
-      (left, right) =>
-        (Date.parse(right.createdAt ?? "") || 0) - (Date.parse(left.createdAt ?? "") || 0) || right.id - left.id,
-    )[0]!
-    const forSha = runs.filter((run) => run.sha === newest.sha)
-    return [...forSha].sort((left, right) => {
-      if (isFailure(left) !== isFailure(right)) return isFailure(left) ? -1 : 1
-      const leftJobs = this.deps.jobs.forRun(left.id).length
-      const rightJobs = this.deps.jobs.forRun(right.id).length
-      if (leftJobs !== rightJobs) return rightJobs - leftJobs
-      return right.id - left.id
-    })[0]
+  private runState(run: RunInfo, primary: boolean) {
+    return {
+      id: run.id,
+      name: run.name,
+      branch: run.branch,
+      sha: run.sha,
+      status: run.status,
+      conclusion: run.conclusion,
+      url: run.url,
+      ...(typeof (run.startedAt ?? run.createdAt) === "string" ? { startedAt: (run.startedAt ?? run.createdAt)! } : {}),
+      ...(isTerminal(run) && typeof run.updatedAt === "string" ? { finishedAt: run.updatedAt } : {}),
+      jobCount: this.deps.jobs.forRun(run.id).length,
+      primary,
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -453,19 +498,24 @@ export class CiService {
   /** Snapshot for the TUI dashboard. Optional fields are omitted so the RPC schema validates. */
   async state(sessionID: string): Promise<CiState> {
     const watches = this.deps.store.bySession(sessionID).map((subscription) => {
-      const run = this.displayRun(subscription.target)
-      const jobs = run
-        ? this.deps.jobs.forRun(run.id).map((job) => ({
+      const runs = this.dashboardRuns(subscription.target)
+      const primary = this.primaryRun(runs)
+      const runStates = runs
+        .map((run) => this.runState(run, run.id === primary?.id))
+        .sort((left, right) =>
+          left.primary === right.primary ? left.name.localeCompare(right.name) : left.primary ? -1 : 1,
+        )
+      const primaryState = runStates.find((run) => run.primary)
+      const jobs = primary
+        ? this.deps.jobs.forRun(primary.id).map((job) => ({
             id: job.id,
             name: job.name,
             status: job.status,
             conclusion: job.conclusion,
-            ...(job.startedAt !== undefined ? { startedAt: job.startedAt } : {}),
-            ...(job.completedAt !== undefined ? { completedAt: job.completedAt } : {}),
+            ...(typeof job.startedAt === "string" ? { startedAt: job.startedAt } : {}),
+            ...(typeof job.completedAt === "string" ? { completedAt: job.completedAt } : {}),
           }))
         : []
-      const startedAt = run ? (run.startedAt ?? run.createdAt) : undefined
-      const finishedAt = run && isTerminal(run) ? run.updatedAt : undefined
       return {
         id: subscription.id,
         target: subscription.target,
@@ -473,21 +523,8 @@ export class CiService {
         notify: subscription.notify,
         merged: subscription.mergedAt !== undefined,
         ...(subscription.mergedAt !== undefined ? { mergedAt: subscription.mergedAt } : {}),
-        ...(run
-          ? {
-              run: {
-                id: run.id,
-                name: run.name,
-                branch: run.branch,
-                sha: run.sha,
-                status: run.status,
-                conclusion: run.conclusion,
-                url: run.url,
-                ...(startedAt !== undefined ? { startedAt } : {}),
-                ...(finishedAt !== undefined ? { finishedAt } : {}),
-              },
-            }
-          : {}),
+        ...(primaryState ? { run: primaryState } : {}),
+        runs: runStates,
         jobs,
       }
     })
@@ -815,6 +852,7 @@ export class CiService {
         : subscription.target.type === "branch" && job.branch !== undefined && subscription.target.value === job.branch
       if (matched) sessions.add(subscription.sessionID)
     }
+    for (const sessionID of sessions) await this.refreshStatus(sessionID)
     for (const sessionID of sessions) this.changed(sessionID)
   }
 
