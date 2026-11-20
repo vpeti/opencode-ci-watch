@@ -14,8 +14,9 @@ import {
   renderRunLine,
   renderSuccess,
 } from "./render.ts"
-import type { DeliveryMode, Include, NotifyMode, RunCache, Subscription, SubscriptionStore } from "./store.ts"
-import type { Delivery, JobInfo, Logger, PushInfo, RepoRef, RunInfo, Target } from "./types.ts"
+import type { DeliveryMode, Include, JobCache, NotifyMode, RunCache, Subscription, SubscriptionStore } from "./store.ts"
+import type { CiState } from "./state.ts"
+import type { Delivery, JobInfo, Logger, MergeInfo, PushInfo, RepoRef, RunInfo, Target } from "./types.ts"
 
 export class CiError extends Error {
   override name = "CiError"
@@ -65,6 +66,8 @@ export interface ServiceDeps {
   readonly enricher: Enricher
   readonly store: SubscriptionStore
   readonly cache: RunCache
+  readonly jobs: JobCache
+  readonly defaultBranch: string
   readonly notifier: Notifier
   readonly forwarder: Forwarder
   readonly log: Logger
@@ -73,6 +76,8 @@ export interface ServiceDeps {
   readonly id?: () => string
   /** Delay before an all-green wake, so a sibling workflow has time to register. */
   readonly greenSettleMs?: number
+  /** Called after a subscription, run, job or merge changes so the TUI can refetch. */
+  readonly onStateChanged?: (sessionID: string) => void
 }
 
 interface Waiter {
@@ -295,7 +300,7 @@ export class CiService {
       .find((entry) => targetKey(entry.target) === targetKey(target) && entry.include.join(",") === include.join(","))
 
     const subscription: Subscription = existing
-      ? { ...existing, expiresAt, notify, delivery }
+      ? { ...existing, expiresAt, notify, delivery, mergedAt: undefined }
       : {
           id: this.deps.id?.() ?? randomUUID().slice(0, 8),
           sessionID,
@@ -307,6 +312,7 @@ export class CiService {
           expiresAt,
         }
     await this.deps.store.save(subscription)
+    this.changed(sessionID)
     await this.ensureForwarder()
     await this.refreshStatus(sessionID)
     void this.reconcile(target).catch((error) => this.deps.log.warn(`cannot reconcile ${targetKey(target)}`, { error: errorMessage(error) }))
@@ -321,6 +327,7 @@ export class CiService {
   async unwatch(sessionID: string, input: { id?: string; branch?: string; sha?: string; run?: number; all?: boolean }): Promise<ToolResult> {
     if (input.all) {
       const removed = await this.deps.store.removeSession(sessionID)
+      this.changed(sessionID)
       await this.refreshStatus(sessionID)
       this.scheduleForwarderStop()
       return { content: removed === 0 ? "nothing to unwatch" : `👋 stopped watching ${removed} target(s)`, metadata: { removed } }
@@ -329,6 +336,7 @@ export class CiService {
       const sub = this.deps.store.list().find((entry) => entry.id === input.id && entry.sessionID === sessionID)
       if (!sub) throw new CiError(`no subscription "${input.id}" for this session`)
       await this.deps.store.remove(sub.id)
+      this.changed(sessionID)
       await this.refreshStatus(sessionID)
       this.scheduleForwarderStop()
       return { content: `👋 stopped watching ${describeTarget(sub.target)}`, metadata: { removed: 1 } }
@@ -339,6 +347,7 @@ export class CiService {
       .bySession(sessionID)
       .filter((entry) => targetKey(entry.target) === targetKey(target))
     for (const entry of matches) await this.deps.store.remove(entry.id)
+    this.changed(sessionID)
     await this.refreshStatus(sessionID)
     this.scheduleForwarderStop()
     return {
@@ -351,22 +360,108 @@ export class CiService {
     if (target.type === "branch") {
       const runs = await this.deps.enricher.recentRuns(target.value, 10)
       for (const run of runs) this.deps.cache.set(this.slug, run, this.now)
+      const latest = runs[0]
+      if (latest && this.deps.jobs.forRun(latest.id).length === 0) await this.fetchJobs(latest)
       const sessions = new Set(
         this.deps.store
           .list()
           .filter((entry) => entry.target.type === "branch" && entry.target.value === target.value)
           .map((entry) => entry.sessionID),
       )
-      for (const sessionID of sessions) await this.refreshStatus(sessionID)
+      for (const sessionID of sessions) {
+        await this.refreshStatus(sessionID)
+        this.changed(sessionID)
+      }
       return
     }
     if (target.type === "sha") {
       const runs = await this.deps.enricher.runsForSha(target.value, 10)
       for (const run of runs) this.deps.cache.set(this.slug, run, this.now)
+      const latest = runs[0]
+      if (latest && this.deps.jobs.forRun(latest.id).length === 0) await this.fetchJobs(latest)
+      const sessions = new Set(
+        this.deps.store
+          .list()
+          .filter((entry) => entry.target.type === "sha" && entry.target.value === target.value)
+          .map((entry) => entry.sessionID),
+      )
+      for (const sessionID of sessions) {
+        await this.refreshStatus(sessionID)
+        this.changed(sessionID)
+      }
       return
     }
     const run = await this.deps.enricher.run(Number(target.value))
-    if (run) this.deps.cache.set(this.slug, run, this.now)
+    if (run) {
+      this.deps.cache.set(this.slug, run, this.now)
+      if (this.deps.jobs.forRun(run.id).length === 0) await this.fetchJobs(run)
+      for (const entry of this.deps.store.list()) {
+        if (entry.target.type === "run" && entry.target.value === String(run.id)) this.changed(entry.sessionID)
+      }
+    }
+  }
+
+  private async fetchJobs(run: RunInfo): Promise<JobInfo[]> {
+    try {
+      const jobs = await this.deps.enricher.jobs(run.id)
+      this.deps.jobs.replace(run.id, jobs, this.now)
+      return jobs
+    } catch (error) {
+      this.deps.log.warn("cannot read job results", { run: run.id, error: errorMessage(error) })
+      return []
+    }
+  }
+
+  private changed(sessionID: string): void {
+    try {
+      this.deps.onStateChanged?.(sessionID)
+    } catch (error) {
+      this.deps.log.warn("state observer failed", { sessionID, error: errorMessage(error) })
+    }
+  }
+
+  /** Snapshot for the TUI dashboard. Optional fields are omitted so the RPC schema validates. */
+  async state(sessionID: string): Promise<CiState> {
+    const watches = this.deps.store.bySession(sessionID).map((subscription) => {
+      const run = this.latestRun(subscription.target)
+      const jobs = run
+        ? this.deps.jobs.forRun(run.id).map((job) => ({
+            id: job.id,
+            name: job.name,
+            status: job.status,
+            conclusion: job.conclusion,
+            ...(job.startedAt !== undefined ? { startedAt: job.startedAt } : {}),
+            ...(job.completedAt !== undefined ? { completedAt: job.completedAt } : {}),
+          }))
+        : []
+      const startedAt = run ? (run.startedAt ?? run.createdAt) : undefined
+      const finishedAt = run && isTerminal(run) ? run.updatedAt : undefined
+      return {
+        id: subscription.id,
+        target: subscription.target,
+        include: subscription.include,
+        notify: subscription.notify,
+        merged: subscription.mergedAt !== undefined,
+        ...(subscription.mergedAt !== undefined ? { mergedAt: subscription.mergedAt } : {}),
+        ...(run
+          ? {
+              run: {
+                id: run.id,
+                name: run.name,
+                branch: run.branch,
+                sha: run.sha,
+                status: run.status,
+                conclusion: run.conclusion,
+                url: run.url,
+                ...(startedAt !== undefined ? { startedAt } : {}),
+                ...(finishedAt !== undefined ? { finishedAt } : {}),
+              },
+            }
+          : {}),
+        jobs,
+      }
+    })
+    return { defaultBranch: this.deps.defaultBranch, watches }
   }
 
   async refreshStatus(sessionID: string): Promise<void> {
@@ -409,7 +504,7 @@ export class CiService {
       let jobs: JobInfo[] = []
       if (withJobs || (withLogs && isFailure(run))) {
         try {
-          jobs = await this.deps.enricher.jobs(run.id)
+          jobs = await this.fetchJobs(run)
           this.deps.cache.set(this.slug, run, this.now)
         } catch (error) {
           lines.push(`  ⚠️ cannot read jobs: ${errorMessage(error)}`)
@@ -583,17 +678,28 @@ export class CiService {
 
   async onDelivery(delivery: Delivery): Promise<void> {
     if (delivery.kind === "workflow_run") await this.onRun(delivery.run)
-    else await this.onPush(delivery.push)
+    else if (delivery.kind === "push") await this.onPush(delivery.push)
+    else if (delivery.kind === "job") await this.onJob(delivery.job)
+    else await this.onMerge(delivery.merge)
   }
 
   private async onPush(push: PushInfo): Promise<void> {
-    if (process.env.CI_WATCH_DEBUG) this.deps.log.info("push delivery", { branch: push.branch, subs: this.deps.store.list().length })
+    if (process.env.CI_WATCH_DEBUG)
+      this.deps.log.info("push delivery", { branch: push.branch, subs: this.deps.store.list().length })
+    const sessions = new Set<string>()
     for (const subscription of this.deps.store.list()) {
+      const targets = subscription.target.type === "branch" && subscription.target.value === push.branch
+      if (!targets && !matchesPush(subscription, push)) continue
+      if (targets && subscription.mergedAt !== undefined) {
+        await this.deps.store.save({ ...subscription, mergedAt: undefined })
+      }
+      sessions.add(subscription.sessionID)
       if (!matchesPush(subscription, push)) continue
       await this.refreshStatus(subscription.sessionID)
       if (this.isSuppressed(subscription.sessionID, subscription.target)) continue
       await this.deps.notifier.wake(subscription.sessionID, renderPush(push), subscription.delivery)
     }
+    for (const sessionID of sessions) this.changed(sessionID)
     for (const waiter of [...this.waiters]) {
       if (waiter.target.type !== "branch" || waiter.target.value !== push.branch) continue
       if (!waiter.sha) waiter.sha = push.after
@@ -612,8 +718,30 @@ export class CiService {
         attempt: run.attempt,
         subs: subscriptions.length,
       })
-    const sessions = new Set(subscriptions.map((subscription) => subscription.sessionID))
-    for (const sessionID of sessions) await this.refreshStatus(sessionID)
+    for (const subscription of subscriptions) {
+      if (
+        subscription.mergedAt !== undefined &&
+        run.createdAt !== undefined &&
+        Date.parse(run.createdAt) > subscription.mergedAt
+      ) {
+        await this.deps.store.save({ ...subscription, mergedAt: undefined })
+      }
+    }
+    // A pushes-only watch on the same branch still needs the run state in the
+    // dashboard, even though it never receives run notifications.
+    const branchSubscriptions = this.deps.store
+      .list()
+      .filter((subscription) => subscription.target.type === "branch" && subscription.target.value === run.branch)
+    const stateSessions = new Set(
+      [...subscriptions, ...branchSubscriptions].map((subscription) => subscription.sessionID),
+    )
+    for (const sessionID of stateSessions) await this.refreshStatus(sessionID)
+    for (const sessionID of stateSessions) this.changed(sessionID)
+
+    if (isTerminal(run) && stateSessions.size > 0 && this.deps.jobs.forRun(run.id).length === 0) {
+      await this.fetchJobs(run)
+      for (const sessionID of stateSessions) this.changed(sessionID)
+    }
 
     if (!isTerminal(run)) {
       for (const waiter of [...this.waiters]) this.considerWaiter(waiter, run)
@@ -644,6 +772,31 @@ export class CiService {
     for (const waiter of [...this.waiters]) this.considerWaiter(waiter, run)
   }
 
+  private async onJob(job: JobInfo): Promise<void> {
+    this.deps.jobs.set(job, this.now)
+    const run = job.runId !== undefined ? this.deps.cache.get(this.slug, job.runId) : undefined
+    const sessions = new Set<string>()
+    for (const subscription of this.deps.store.list()) {
+      const matched = run
+        ? matchesRun(subscription, run) ||
+          (subscription.target.type === "branch" &&
+            run.branch !== "" &&
+            subscription.target.value === run.branch)
+        : subscription.target.type === "branch" && job.branch !== undefined && subscription.target.value === job.branch
+      if (matched) sessions.add(subscription.sessionID)
+    }
+    for (const sessionID of sessions) this.changed(sessionID)
+  }
+
+  private async onMerge(merge: MergeInfo): Promise<void> {
+    for (const subscription of this.deps.store.list()) {
+      if (subscription.target.type !== "branch" || subscription.target.value !== merge.head) continue
+      await this.deps.store.save({ ...subscription, mergedAt: this.now })
+      await this.refreshStatus(subscription.sessionID)
+      this.changed(subscription.sessionID)
+    }
+  }
+
   private trimNotified(): void {
     if (this.notified.size <= 2000) return
     const cutoff = this.now - DAY
@@ -656,12 +809,7 @@ export class CiService {
   }
 
   private async failureMessage(run: RunInfo): Promise<string> {
-    let jobs: JobInfo[] = []
-    try {
-      jobs = await this.deps.enricher.jobs(run.id)
-    } catch (error) {
-      this.deps.log.warn("cannot read job results", { run: run.id, error: errorMessage(error) })
-    }
+    const jobs = this.deps.jobs.forRun(run.id).length > 0 ? this.deps.jobs.forRun(run.id) : await this.fetchJobs(run)
     const failed = jobs.find((job) => job.conclusion === "failure" || job.conclusion === "timed_out")
     if (!failed) return renderFailure(run, jobs)
     try {

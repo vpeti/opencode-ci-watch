@@ -145,3 +145,15 @@ checks`) or `/ci`.
 
 It is deliberately not wired to the server part yet; delete the `./tui` export from
 `package.json` to remove it.
+
+## Dashboard state
+
+The server forwards `workflow_job` and `pull_request` in addition to `push` and
+`workflow_run`, caches per-job state in workflow order, resolves the repository's default branch,
+and exposes the TUI contract over RPC:
+
+- `ci.state({ sessionID })` → `{ defaultBranch, watches }`, with the latest run, job states and
+  timestamps for every subscription of that session;
+- `ci.updated` → `{ sessionID }`, emitted after a run, job, merge or subscription change.
+
+The TUI part still renders mock data; wiring it to this RPC is the next step.

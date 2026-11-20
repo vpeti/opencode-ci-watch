@@ -12,13 +12,14 @@ import { currentGitBranch, resolveRepo, sameRepo } from "./github/repo.ts"
 import { startWebhookServer } from "./http.ts"
 import { errorMessage, logger } from "./log.ts"
 import { Notifier, type SessionApiLike } from "./notify.ts"
+import { CiRpc } from "./rpc.ts"
 import { CiService } from "./service.ts"
 import { SKILL_CONTENT, SKILL_DESCRIPTION, SKILL_ID, SKILL_NAME, SKILL_PATH } from "./skill.ts"
 import { pushDirectory } from "./shell.ts"
-import { RunCache, SubscriptionStore, type StorageLike } from "./store.ts"
+import { JobCache, RunCache, SubscriptionStore, type StorageLike } from "./store.ts"
 import { registerTools } from "./tools.ts"
 
-const EVENTS = ["push", "workflow_run"] as const
+const EVENTS = ["push", "workflow_run", "workflow_job", "pull_request"] as const
 
 
 async function registerSkill(ctx: Plugin.Context): Promise<void> {
@@ -92,8 +93,17 @@ export default Plugin.define({
       }
     }
 
+    let defaultBranch = "main"
+    try {
+      const value = await gh.text(["api", `repos/${repo.slug}`, "--jq", ".default_branch"], { timeoutMs: 15_000 })
+      if (value) defaultBranch = value
+    } catch (error) {
+      logger.warn("cannot read the default branch; assuming main", { error: errorMessage(error) })
+    }
+
     const secret = randomBytes(32).toString("hex")
     let service: CiService | undefined
+    let emitState: ((sessionID: string) => void) | undefined
 
     let server: Awaited<ReturnType<typeof startWebhookServer>>
     try {
@@ -135,25 +145,42 @@ export default Plugin.define({
 
     const store = new SubscriptionStore(ctx.storage as unknown as StorageLike)
     const notifier = new Notifier(ctx.session as unknown as SessionApiLike, logger)
-    service = new CiService({
+    const ci = new CiService({
       repo,
       config,
       enricher: new Enricher(gh, repo),
       store,
       cache: new RunCache(),
+      jobs: new JobCache(),
+      defaultBranch,
       notifier,
       forwarder,
       log: logger,
       currentBranch: () => currentGitBranch(directory),
+      onStateChanged: (sessionID) => emitState?.(sessionID),
     })
+    service = ci
 
     try {
-      await service.start()
+      const registration = await ctx.rpc.register(CiRpc, {
+        state: async (input) => ci.state((input as { sessionID: string }).sessionID),
+      })
+      emitState = (sessionID) => {
+        void registration.events.emit("updated", { sessionID }).catch((error) => {
+          logger.warn("cannot emit ci state", { error: errorMessage(error) })
+        })
+      }
+    } catch (error) {
+      logger.warn("cannot register the CI state RPC", { error: errorMessage(error) })
+    }
+
+    try {
+      await ci.start()
     } catch (error) {
       logger.error("cannot restore subscriptions", { error: errorMessage(error) })
     }
 
-    await registerTools(ctx, service)
+    await registerTools(ctx, ci)
     await registerSkill(ctx)
     try {
       await applyAgentTransforms(ctx, config)
@@ -166,7 +193,7 @@ export default Plugin.define({
       try {
         for await (const event of ctx.event.subscribe({ types: ["session.deleted"], signal: controller.signal })) {
           const sessionID = (event.data as { sessionID?: string } | undefined)?.sessionID
-          if (sessionID) await service.forgetSession(sessionID)
+          if (sessionID) await ci.forgetSession(sessionID)
         }
       } catch (error) {
         if (!controller.signal.aborted) {
@@ -188,7 +215,7 @@ export default Plugin.define({
         const target = pushDirectory(command, workdir)
         if (!target) return
         if (!(await sameRepo(directory, target))) return
-        void service.autoSubscribe(event.sessionID).catch((error) => {
+        void ci.autoSubscribe(event.sessionID).catch((error) => {
           logger.warn("auto-subscribe failed", { error: errorMessage(error) })
         })
       })
@@ -201,7 +228,7 @@ export default Plugin.define({
       for (const sessionID of new Set(store.list().map((entry) => entry.sessionID))) {
         await notifier.setStatus(sessionID, undefined)
       }
-      await service.stop()
+      await ci.stop()
       await hooks.removeOwned()
       await server.close()
       logger.info("stopped")

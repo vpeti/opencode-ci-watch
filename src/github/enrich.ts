@@ -3,7 +3,7 @@ import { trimLog, type TrimmedLog } from "../render.ts"
 import type { JobInfo, RepoRef, RunInfo } from "../types.ts"
 import { Gh } from "./gh.ts"
 
-const JOB_FIELDS = `{id: .id, name: .name, status: .status, conclusion: .conclusion, url: .html_url, steps: [.steps[]? | {name: .name, conclusion: .conclusion}]}`
+const JOB_FIELDS = `{id: .id, name: .name, status: .status, conclusion: .conclusion, url: .html_url, startedAt: .started_at, completedAt: .completed_at, steps: [.steps[]? | {name: .name, conclusion: .conclusion}]}`
 
 interface JobPayload {
   id?: number
@@ -11,6 +11,8 @@ interface JobPayload {
   status?: string
   conclusion?: string | null
   url?: string
+  startedAt?: string
+  completedAt?: string
   steps?: Array<{ name?: string; conclusion?: string | null }>
 }
 
@@ -33,14 +35,19 @@ export class Enricher {
       ],
       { signal },
     )
-    return (data.jobs ?? []).map((job) => ({
-      id: job.id ?? 0,
-      name: job.name ?? "job",
-      status: job.status ?? "unknown",
-      conclusion: job.conclusion ?? null,
-      url: job.url ?? "",
-      steps: (job.steps ?? []).map((step) => ({ name: step.name ?? "step", conclusion: step.conclusion ?? null })),
-    }))
+    return (data.jobs ?? []).map((job) => {
+      const conclusion = job.conclusion ?? null
+      return {
+        id: job.id ?? 0,
+        name: job.name ?? "job",
+        status: conclusion !== null ? "completed" : (job.status ?? "unknown"),
+        conclusion,
+        url: job.url ?? "",
+        steps: (job.steps ?? []).map((step) => ({ name: step.name ?? "step", conclusion: step.conclusion ?? null })),
+        startedAt: job.startedAt,
+        completedAt: job.completedAt,
+      }
+    })
   }
 
   async failedLog(runId: number, jobId: number | undefined, maxChars: number, signal?: AbortSignal): Promise<TrimmedLog> {

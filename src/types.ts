@@ -22,6 +22,7 @@ export interface RunInfo {
   readonly attempt: number
   readonly url: string
   readonly pullRequests: number[]
+  readonly startedAt?: string
   readonly createdAt?: string
   readonly updatedAt?: string
 }
@@ -33,11 +34,26 @@ export interface JobStep {
 
 export interface JobInfo {
   readonly id: number
+  readonly runId?: number
+  readonly branch?: string
+  readonly sha?: string
   readonly name: string
   readonly status: string
   readonly conclusion: string | null
   readonly url: string
   readonly steps: readonly JobStep[]
+  readonly startedAt?: string
+  readonly completedAt?: string
+}
+
+export interface MergeInfo {
+  readonly number: number
+  readonly title: string
+  readonly head: string
+  readonly base: string
+  readonly sha: string
+  readonly actor: string
+  readonly url: string
 }
 
 export interface PushInfo {
@@ -54,6 +70,8 @@ export interface PushInfo {
 export type Delivery =
   | { readonly kind: "push"; readonly repo: RepoRef; readonly push: PushInfo }
   | { readonly kind: "workflow_run"; readonly repo: RepoRef; readonly run: RunInfo }
+  | { readonly kind: "job"; readonly repo: RepoRef; readonly job: JobInfo }
+  | { readonly kind: "merge"; readonly repo: RepoRef; readonly merge: MergeInfo }
 
 export interface WebhookDelivery {
   readonly event: string

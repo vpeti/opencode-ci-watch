@@ -5,9 +5,9 @@ import type { Enricher } from "../src/github/enrich.ts"
 import type { Notifier } from "../src/notify.ts"
 import type { Forwarder } from "../src/forwarder.ts"
 import { CiService } from "../src/service.ts"
-import { RunCache, SubscriptionStore, type StorageLike } from "../src/store.ts"
+import { JobCache, RunCache, SubscriptionStore, type StorageLike } from "../src/store.ts"
 import type { Logger } from "../src/types.ts"
-import { job, pushPayload, run, workflowRunPayload } from "./helpers.ts"
+import { job, mergePayload, pushPayload, run, workflowJobPayload, workflowRunPayload } from "./helpers.ts"
 import { normalizeDelivery } from "../src/events.ts"
 
 const silent: Logger = { info() {}, warn() {}, error() {} }
@@ -91,21 +91,26 @@ function harness(options: { recent?: () => Promise<ReturnType<typeof run>[]>; no
     async stop() {},
   } as unknown as Forwarder
 
+  const changes: string[] = []
   const store = new SubscriptionStore(storage())
+  const jobs = new JobCache()
   const service = new CiService({
     repo: { owner: "acme", name: "widgets", slug: "acme/widgets" },
     config,
     enricher,
     store,
     cache: new RunCache(),
+    jobs,
+    defaultBranch: "main",
     notifier,
     forwarder,
     log: silent,
     currentBranch: async () => "main",
     now: () => 1_000_000,
     greenSettleMs: options.greenSettleMs,
+    onStateChanged: (sessionID: string) => changes.push(sessionID),
   })
-  return { service, store, statuses, wakes, starts: () => starts }
+  return { service, store, jobs, statuses, wakes, changes, starts: () => starts }
 }
 
 test("watching starts the forwarder and writes the status entry", async () => {
@@ -269,4 +274,54 @@ test("a green run from an older commit does not wake after a newer push", async 
   assert.equal(h.wakes.length, 1)
   assert.match(h.wakes[0]!.text, /^✅ main · 1\/1 green/)
   assert.doesNotMatch(h.wakes[0]!.text, /⏳/)
+})
+
+test("the dashboard state carries the run and its jobs", async () => {
+  const h = harness()
+  await h.service.watch("ses_1", { branch: "feature/login" })
+
+  const runDelivery = normalizeDelivery(
+    "workflow_run",
+    workflowRunPayload({ status: "in_progress", conclusion: null, head_branch: "feature/login" }),
+  )
+  const jobDelivery = normalizeDelivery("workflow_job", workflowJobPayload({ head_branch: "feature/login" }))
+  assert.ok(runDelivery && jobDelivery)
+  await h.service.onDelivery(runDelivery)
+  await h.service.onDelivery(jobDelivery)
+
+  const state = await h.service.state("ses_1")
+  assert.equal(state.defaultBranch, "main")
+  assert.equal(state.watches.length, 1)
+  assert.equal(state.watches[0]?.run?.id, 1001)
+  assert.equal(state.watches[0]?.jobs[0]?.name, "test")
+  assert.equal(state.watches[0]?.jobs[0]?.startedAt, "2026-11-20T10:00:05Z")
+  assert.ok(h.changes.includes("ses_1"))
+})
+
+test("a merge marks the branch and clears it on later activity", async () => {
+  const h = harness()
+  await h.service.watch("ses_1", { branch: "feature/login" })
+  const merge = normalizeDelivery("pull_request", mergePayload())
+  assert.ok(merge)
+  await h.service.onDelivery(merge)
+
+  let state = await h.service.state("ses_1")
+  assert.equal(state.watches[0]?.merged, true)
+  assert.ok(state.watches[0]?.mergedAt)
+
+  await h.service.watch("ses_1", { branch: "feature/login" })
+  state = await h.service.state("ses_1")
+  assert.equal(state.watches[0]?.merged, false)
+})
+
+test("a pushes-only watch still receives the branch run state", async () => {
+  const h = harness()
+  await h.service.watch("ses_1", { branch: "main", include: ["pushes"] })
+  const delivery = normalizeDelivery("workflow_run", workflowRunPayload({ status: "in_progress", conclusion: null }))
+  assert.ok(delivery)
+  await h.service.onDelivery(delivery)
+
+  const state = await h.service.state("ses_1")
+  assert.equal(state.watches[0]?.run?.id, 1001)
+  assert.equal(state.watches[0]?.run?.status, "in_progress")
 })

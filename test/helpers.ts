@@ -69,3 +69,42 @@ export function pushPayload(overrides: Record<string, unknown> = {}) {
     ...overrides,
   }
 }
+
+export function workflowJobPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    action: "in_progress",
+    repository: { full_name: "acme/widgets" },
+    workflow_job: {
+      id: 5001,
+      run_id: 1001,
+      name: "test",
+      head_branch: "main",
+      head_sha: "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+      status: "in_progress",
+      conclusion: null,
+      html_url: "https://github.com/acme/widgets/actions/runs/1001/job/5001",
+      started_at: "2026-11-20T10:00:05Z",
+      completed_at: null,
+      steps: [],
+      ...overrides,
+    },
+  }
+}
+
+export function mergePayload(overrides: Record<string, unknown> = {}) {
+  return {
+    action: "closed",
+    repository: { full_name: "acme/widgets" },
+    pull_request: {
+      number: 42,
+      title: "feat: login",
+      merged: true,
+      merge_commit_sha: "c1c2c3d4e5f60718293a4b5c6d7e8f9012345678",
+      head: { ref: "feature/login" },
+      base: { ref: "main" },
+      user: { login: "alice" },
+      html_url: "https://github.com/acme/widgets/pull/42",
+      ...overrides,
+    },
+  }
+}

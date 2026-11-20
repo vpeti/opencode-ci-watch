@@ -1,4 +1,4 @@
-import type { RunInfo, Target } from "./types.ts"
+import type { JobInfo, RunInfo, Target } from "./types.ts"
 
 export type Include = "runs" | "pushes"
 export type NotifyMode = "failures" | "all" | "none"
@@ -13,6 +13,8 @@ export interface Subscription {
   readonly delivery: DeliveryMode
   readonly createdAt: number
   readonly expiresAt: number
+  /** Set when the pull request for this branch merged; cleared by later activity. */
+  readonly mergedAt?: number
 }
 
 export interface StorageLike {
@@ -148,6 +150,68 @@ export class RunCache {
     while (this.runs.size > this.max) {
       const oldest = this.runs.keys().next().value
       if (oldest === undefined) break
+      this.runs.delete(oldest)
+    }
+  }
+}
+
+export class JobCache {
+  private readonly runs = new Map<number, { order: Map<number, number>; jobs: Map<number, JobInfo> }>()
+  private readonly touched = new Map<number, number>()
+  private readonly max: number
+  private readonly ttlMs: number
+
+  constructor(max = 200, ttlMs = 6 * 60 * 60 * 1000) {
+    this.max = max
+    this.ttlMs = ttlMs
+  }
+
+  set(job: JobInfo, now = Date.now()): void {
+    if (job.runId === undefined) return
+    const bucket = this.runs.get(job.runId) ?? { order: new Map<number, number>(), jobs: new Map<number, JobInfo>() }
+    if (!bucket.jobs.has(job.id)) bucket.order.set(job.id, bucket.order.size)
+    bucket.jobs.set(job.id, job)
+    this.runs.set(job.runId, bucket)
+    this.touched.set(job.runId, now)
+    this.trim(now)
+  }
+
+  replace(runId: number, jobs: readonly JobInfo[], now = Date.now()): void {
+    const order = new Map<number, number>()
+    const map = new Map<number, JobInfo>()
+    jobs.forEach((job, index) => {
+      order.set(job.id, index)
+      map.set(job.id, job)
+    })
+    this.runs.set(runId, { order, jobs: map })
+    this.touched.set(runId, now)
+    this.trim(now)
+  }
+
+  /** Workflow order, as returned by the jobs API. */
+  forRun(runId: number): JobInfo[] {
+    const bucket = this.runs.get(runId)
+    if (!bucket) return []
+    return [...bucket.jobs.values()].sort(
+      (left, right) => (bucket.order.get(left.id) ?? 0) - (bucket.order.get(right.id) ?? 0),
+    )
+  }
+
+  get size(): number {
+    return this.runs.size
+  }
+
+  private trim(now: number): void {
+    for (const [runId, at] of this.touched) {
+      if (now - at > this.ttlMs) {
+        this.touched.delete(runId)
+        this.runs.delete(runId)
+      }
+    }
+    while (this.touched.size > this.max) {
+      const oldest = this.touched.keys().next().value
+      if (oldest === undefined) break
+      this.touched.delete(oldest)
       this.runs.delete(oldest)
     }
   }

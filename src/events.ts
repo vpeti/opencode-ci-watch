@@ -1,4 +1,4 @@
-import type { Delivery, PushInfo, RepoRef, RunInfo } from "./types.ts"
+import type { Delivery, JobInfo, MergeInfo, PushInfo, RepoRef, RunInfo } from "./types.ts"
 
 function rec(value: unknown): Record<string, unknown> | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined
@@ -71,8 +71,52 @@ export function toRunInfo(value: unknown): RunInfo | undefined {
     attempt: num(run.run_attempt) ?? 1,
     url: str(run.html_url) ?? "",
     pullRequests,
+    startedAt: str(run.run_started_at) ?? str(run.started_at),
     createdAt: str(run.created_at),
     updatedAt: str(run.updated_at),
+  }
+}
+
+function jobInfo(value: unknown): JobInfo | undefined {
+  const job = rec(value)
+  if (!job) return undefined
+  const id = num(job.id)
+  if (id === undefined) return undefined
+  const conclusion = str(job.conclusion) ?? null
+  return {
+    id,
+    runId: num(job.run_id),
+    branch: str(job.head_branch) ?? "",
+    sha: str(job.head_sha) ?? "",
+    name: str(job.name) ?? "job",
+    status: conclusion !== null ? "completed" : (str(job.status) ?? "unknown"),
+    conclusion,
+    url: str(job.html_url) ?? "",
+    steps: list(job.steps).map((entry) => ({
+      name: str(rec(entry)?.name) ?? "step",
+      conclusion: str(rec(entry)?.conclusion) ?? null,
+    })),
+    startedAt: str(job.started_at),
+    completedAt: str(job.completed_at),
+  }
+}
+
+function mergeInfo(payload: Record<string, unknown>): MergeInfo | undefined {
+  if (payload.action !== "closed") return undefined
+  const pr = rec(payload.pull_request)
+  if (!pr || pr.merged !== true) return undefined
+  const number = num(pr.number)
+  if (number === undefined) return undefined
+  const head = rec(pr.head)
+  const base = rec(pr.base)
+  return {
+    number,
+    title: str(pr.title) ?? `#${number}`,
+    head: str(head?.ref) ?? "",
+    base: str(base?.ref) ?? "",
+    sha: str(pr.merge_commit_sha) ?? "",
+    actor: str(rec(pr.user)?.login) ?? "unknown",
+    url: str(pr.html_url) ?? "",
   }
 }
 
@@ -90,6 +134,16 @@ export function normalizeDelivery(event: string, payload: unknown): Delivery | n
   if (event === "workflow_run") {
     const run = toRunInfo(body.workflow_run)
     return run ? { kind: "workflow_run", repo, run } : null
+  }
+
+  if (event === "workflow_job") {
+    const job = jobInfo(body.workflow_job)
+    return job ? { kind: "job", repo, job } : null
+  }
+
+  if (event === "pull_request") {
+    const merge = mergeInfo(body)
+    return merge ? { kind: "merge", repo, merge } : null
   }
 
   return null

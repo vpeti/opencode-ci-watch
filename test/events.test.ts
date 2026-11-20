@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { isFailure, isSuccess, isTerminal, normalizeDelivery } from "../src/events.ts"
-import { pushPayload, workflowRunPayload } from "./helpers.ts"
+import { mergePayload, pushPayload, workflowJobPayload, workflowRunPayload } from "./helpers.ts"
 
 test("normalizes a workflow_run event", () => {
   const delivery = normalizeDelivery("workflow_run", workflowRunPayload())
@@ -47,4 +47,29 @@ test("ignores tag pushes and unrelated events", () => {
 test("rejects payloads without a repository or run id", () => {
   assert.equal(normalizeDelivery("push", { ref: "refs/heads/main" }), null)
   assert.equal(normalizeDelivery("workflow_run", { repository: { full_name: "acme/widgets" }, workflow_run: {} }), null)
+})
+
+test("normalizes a workflow_job event", () => {
+  const delivery = normalizeDelivery("workflow_job", workflowJobPayload())
+  assert.ok(delivery && delivery.kind === "job")
+  assert.equal(delivery.job.id, 5001)
+  assert.equal(delivery.job.runId, 1001)
+  assert.equal(delivery.job.branch, "main")
+  assert.equal(delivery.job.startedAt, "2026-11-20T10:00:05Z")
+})
+
+test("normalizes a merged pull request", () => {
+  const delivery = normalizeDelivery("pull_request", mergePayload())
+  assert.ok(delivery && delivery.kind === "merge")
+  assert.equal(delivery.merge.number, 42)
+  assert.equal(delivery.merge.head, "feature/login")
+  assert.equal(delivery.merge.base, "main")
+})
+
+test("ignores pull requests that were closed without merging", () => {
+  const delivery = normalizeDelivery(
+    "pull_request",
+    mergePayload({ merged: false, merged_at: null }),
+  )
+  assert.equal(delivery, null)
 })
