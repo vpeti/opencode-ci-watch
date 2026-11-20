@@ -156,6 +156,7 @@ function Sidebar(props: { sessionID: string }) {
   const [state, setState] = createSignal<CiState>()
   const [loaded, setLoaded] = createSignal(false)
   const [error, setError] = createSignal(false)
+  let reported = false
 
   const refresh = async (sessionID: string) => {
     try {
@@ -165,8 +166,16 @@ function Sidebar(props: { sessionID: string }) {
         setLoaded(true)
         setError(false)
       }
-    } catch {
-      if (sessionID === props.sessionID) setError(true)
+    } catch (cause) {
+      if (sessionID === props.sessionID) {
+        setError(true)
+        if (!reported) {
+          reported = true
+          const message = cause instanceof Error ? cause.message : String(cause)
+          console.error("ci: state unavailable", cause)
+          context.ui.toast.show({ message: `CI: ${message}`, variant: "error", duration: 10_000 })
+        }
+      }
     }
   }
 
@@ -205,7 +214,13 @@ function Sidebar(props: { sessionID: string }) {
   })
   const failed = createMemo(() => watches().filter((watch) => overall(watch) === "failed").length)
 
-  // In projects without a usable server plugin the section stays hidden.
+  if (error() && !state()) {
+    return (
+      <box flexDirection="column">
+        <text fg={context.theme.text.muted}>CI unavailable</text>
+      </box>
+    )
+  }
   if (!state()) return null
   if (watches().length === 0) {
     return (
