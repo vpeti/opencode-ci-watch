@@ -3,6 +3,15 @@ import { join } from "node:path"
 
 export type DeliveryMode = "queue" | "steer"
 
+export type AgentToolMode = "all" | "read" | "none"
+
+export interface AgentRule {
+  /** Which ci tools the agent may use. Default: all. */
+  tools?: AgentToolMode
+  /** false disables the generated note; a string replaces it. */
+  instructions?: boolean | string
+}
+
 export interface NotifyConfig {
   /** Wake the session on a green workflow too. Default false: successes only update the status entry. */
   success: boolean
@@ -20,6 +29,7 @@ export interface Config {
   forwarder: { idleTimeoutMinutes: number; restartMax: number }
   maxLogChars: number
   waitTimeoutSeconds: number
+  agents: Record<string, AgentRule>
 }
 
 export const PROJECT_CONFIG_PATH = ".opencode/ci-watch.json"
@@ -32,6 +42,7 @@ const DEFAULTS: Config = {
   forwarder: { idleTimeoutMinutes: 30, restartMax: 5 },
   maxLogChars: 1200,
   waitTimeoutSeconds: 300,
+  agents: {},
 }
 
 export class ConfigError extends Error {
@@ -72,6 +83,36 @@ function delivery(value: unknown, path: string, fallback: DeliveryMode): Deliver
   if (value === undefined) return fallback
   if (value !== "queue" && value !== "steer") throw new ConfigError(`${path} must be "queue" or "steer"`)
   return value
+}
+
+function agentMode(value: unknown, path: string, fallback: AgentToolMode): AgentToolMode {
+  if (value === undefined) return fallback
+  if (value !== "all" && value !== "read" && value !== "none") {
+    throw new ConfigError(`${path} must be "all", "read" or "none"`)
+  }
+  return value
+}
+
+function agentRules(value: unknown): Record<string, AgentRule> {
+  const source = object(value, "agents")
+  const out: Record<string, AgentRule> = {}
+  for (const [name, entry] of Object.entries(source)) {
+    const path = `agents.${name}`
+    if (entry === false) {
+      out[name] = { tools: "none", instructions: false }
+      continue
+    }
+    const rule = object(entry, path)
+    const instructions = rule.instructions
+    if (instructions !== undefined && typeof instructions !== "boolean" && typeof instructions !== "string") {
+      throw new ConfigError(`${path}.instructions must be a boolean or a string`)
+    }
+    out[name] = {
+      tools: agentMode(rule.tools, `${path}.tools`, "all"),
+      instructions,
+    }
+  }
+  return out
 }
 
 function truthy(value: string | undefined): boolean {
@@ -157,5 +198,6 @@ export async function loadConfig(input: LoadConfigInput): Promise<Config> {
     },
     maxLogChars: int(raw.maxLogChars, "maxLogChars", DEFAULTS.maxLogChars, 200, 4000),
     waitTimeoutSeconds: int(raw.waitTimeoutSeconds, "waitTimeoutSeconds", DEFAULTS.waitTimeoutSeconds, 15, 900),
+    agents: agentRules(raw.agents),
   }
 }

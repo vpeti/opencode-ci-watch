@@ -57,9 +57,19 @@ child processes.
   "account": "your-gh-login",           // default: user-level option
   "autoSubscribe": { "onPush": false }, // opt-in: watch the branch after `git push`
   "notify": { "success": false },       // false: green runs only update the status line
-  "maxLogChars": 1200
+  "maxLogChars": 1200,
+  "agents": {
+    "*": { "tools": "read" },           // ci_status + ci_log everywhere
+    "build": { "tools": "all" },        // the implementation agent may watch and wait
+    "plan": false                       // no ci tools, no note
+  }
 }
 ```
+
+`agents` is applied through the agent transform: `all` exposes every tool, `read` only `ci_status`/`ci_log`,
+`none` denies all five, and the plugin appends a short usage note to the agent's system prompt unless
+`"instructions": false` or a custom string is given. The note and the permissions are recomputed on every
+plugin load, so they never stack up.
 
 Environment overrides for scripted use: `CI_WATCH_REPO`, `CI_WATCH_ACCOUNT`, `CI_WATCH_DISABLE`.
 

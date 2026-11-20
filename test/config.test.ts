@@ -44,6 +44,24 @@ test("project config overrides plugin options, env overrides both", async () => 
   assert.equal(config.maxLogChars, 900)
 })
 
+test("parses per-agent rules", async () => {
+  const config = await loadConfig({
+    directory: await project({ agents: { "*": { tools: "read" }, build: { instructions: "custom" }, plan: false } }),
+    options: {},
+    env: {},
+  })
+  assert.deepEqual(config.agents["*"], { tools: "read", instructions: undefined })
+  assert.deepEqual(config.agents.build, { tools: "all", instructions: "custom" })
+  assert.deepEqual(config.agents.plan, { tools: "none", instructions: false })
+})
+
+test("rejects an unknown agent tool mode", async () => {
+  await assert.rejects(
+    loadConfig({ directory: await project({ agents: { build: { tools: "write" } } }), options: {}, env: {} }),
+    ConfigError,
+  )
+})
+
 test("CI_WATCH_DISABLE turns the plugin off", async () => {
   const config = await loadConfig({ directory: await project(), options: {}, env: { CI_WATCH_DISABLE: "1" } })
   assert.equal(config.disabled, true)

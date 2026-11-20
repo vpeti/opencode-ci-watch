@@ -20,6 +20,7 @@ const config: Config = {
   forwarder: { idleTimeoutMinutes: 30, restartMax: 5 },
   maxLogChars: 1200,
   waitTimeoutSeconds: 300,
+  agents: {},
 }
 
 function storage(): StorageLike {

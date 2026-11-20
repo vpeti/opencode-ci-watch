@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto"
 import { Plugin, Skill } from "@opencode/plugin"
+import { applyAgentTransforms } from "./agents.ts"
 import { loadConfig, type Config } from "./config.ts"
 import { normalizeDelivery } from "./events.ts"
 import { Forwarder } from "./forwarder.ts"
@@ -162,6 +163,11 @@ export default Plugin.define({
 
     await registerTools(ctx, { service })
     await registerSkill(ctx)
+    try {
+      await applyAgentTransforms(ctx, config)
+    } catch (error) {
+      logger.warn("cannot apply agent transforms", { error: errorMessage(error) })
+    }
 
     const controller = new AbortController()
     void (async () => {
