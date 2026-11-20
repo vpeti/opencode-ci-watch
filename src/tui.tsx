@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs"
 import { createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { Plugin, usePlugin } from "@opencode/plugin/tui"
 import { CiRpc, type CiJobState, type CiState, type CiWatchState } from "./rpc.ts"
@@ -34,6 +35,12 @@ const SPIN_MS = 125
 
 const [frame, setFrame] = createSignal(0)
 const [now, setNow] = createSignal(Date.now())
+
+const debug = (line: string) => {
+  try {
+    appendFileSync("/tmp/ci-tui.log", `${new Date().toISOString()} ${line}\n`)
+  } catch {}
+}
 
 function tone(context: ReturnType<typeof usePlugin>, state: CheckState) {
   const feedback = context.theme.text.feedback
@@ -154,6 +161,7 @@ function Sidebar(props: { sessionID: string }) {
   const context = usePlugin()
   const [view, updateView] = context.storage.store("view", { initial: { open: true } })
   const [state, setState] = createSignal<CiState>()
+  debug(`sidebar mount session=${props.sessionID}`)
   const [loaded, setLoaded] = createSignal(false)
   const [error, setError] = createSignal(false)
   let reported = false
@@ -161,13 +169,18 @@ function Sidebar(props: { sessionID: string }) {
   const refresh = async (sessionID: string) => {
     try {
       const location = context.location ?? context.data.location.default()
-      const next = (await context.client.rpc(CiRpc).state({ sessionID }, { location })) as CiState
+      const next = (await context.client.rpc(CiRpc).state(
+        { sessionID },
+        { location, signal: AbortSignal.timeout(3_000) },
+      )) as CiState
+      debug(`state ok session=${sessionID} watches=${next.watches.length}`)
       if (sessionID === props.sessionID) {
         setState(next)
         setLoaded(true)
         setError(false)
       }
     } catch (cause) {
+      debug(`state error session=${sessionID} ${cause instanceof Error ? cause.message : String(cause)}`)
       if (sessionID === props.sessionID) {
         setError(true)
         if (!reported) {
@@ -272,6 +285,7 @@ function Sidebar(props: { sessionID: string }) {
 export default Plugin.define({
   id: "ci",
   setup(context) {
+    debug("setup")
     let lastSecond = Math.floor(Date.now() / 1000)
     const tick = setInterval(() => {
       setFrame((value) => (value + 1) % SPINNER.length)
@@ -284,7 +298,10 @@ export default Plugin.define({
 
     context.ui.slot({
       append: "sidebar.content",
-      render: (props) => <Sidebar sessionID={props.sessionID} />,
+      render: (props) => {
+        debug(`slot render session=${props.sessionID}`)
+        return <Sidebar sessionID={props.sessionID} />
+      },
     })
     return () => clearInterval(tick)
   },
