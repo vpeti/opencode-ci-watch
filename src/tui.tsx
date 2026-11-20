@@ -59,7 +59,7 @@ const STATE: Record<CheckState, { dot: string; label: string; tone: "success" | 
 
 function tone(context: ReturnType<typeof usePlugin>, state: CheckState) {
   const feedback = context.theme.text.feedback
-  if (state === "run") return pulse() ? feedback.warning.base : feedback.warning.muted
+  if (state === "run") return feedback.warning.base
   if (state === "pass") return feedback.success.base
   if (state === "fail") return feedback.error.base
   if (state === "queue") return feedback.warning.base
@@ -78,8 +78,10 @@ const initial = (): Watch[] =>
     ),
   }))
 
+const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
 const [demo, setDemo] = createSignal<Watch[]>(initial())
-const [pulse, setPulse] = createSignal(0)
+const [frame, setFrame] = createSignal(0)
 const [now, setNow] = createSignal(Date.now())
 
 function clock(ms: number): string {
@@ -190,7 +192,7 @@ function WatchLine(props: { watch: Watch }) {
   return (
     <box flexDirection="row" gap={1} minWidth={0}>
       <text fg={tone(context, OVERALL[state].tone)} flexShrink={0}>
-        {OVERALL[state].dot}
+        {state === "running" ? SPINNER[frame() % SPINNER.length] : OVERALL[state].dot}
       </text>
       <text fg={context.theme.text.base} wrapMode="none" truncate flexGrow={1} flexShrink={1} minWidth={0}>
         <b>{props.watch.branch}</b>
@@ -212,7 +214,7 @@ function CheckLine(props: { check: Check }) {
   return (
     <box flexDirection="row" gap={1} minWidth={0}>
       <text fg={tone(context, props.check.state)} flexShrink={0}>
-        {STATE[props.check.state].dot}
+        {props.check.state === "run" ? SPINNER[frame() % SPINNER.length] : STATE[props.check.state].dot}
       </text>
       <text fg={context.theme.text.muted} wrapMode="none" truncate flexGrow={1} flexShrink={1} minWidth={0}>
         {props.check.name}
@@ -270,8 +272,8 @@ export default Plugin.define({
   id: "ci",
   setup(context) {
     let lastSecond = Math.floor(Date.now() / 1000)
-    const stopTicks = context.renderer.onAnimationTick(4, (_delta, ticks) => {
-      setPulse(ticks % 2)
+    const stopTicks = context.renderer.onAnimationTick(8, (_delta, ticks) => {
+      setFrame(ticks)
       const second = Math.floor(Date.now() / 1000)
       if (second !== lastSecond) {
         lastSecond = second
