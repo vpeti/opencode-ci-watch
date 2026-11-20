@@ -71,6 +71,9 @@ child processes.
 `"instructions": false` or a custom string is given. The note and the permissions are recomputed on every
 plugin load, so they never stack up.
 
+OpenCode reads this file when the plugin loads, so **restart OpenCode (or reload the plugin) after
+changing it**. Editing a plugin source file reloads it automatically; this config file does not.
+
 Environment overrides for scripted use: `CI_WATCH_REPO`, `CI_WATCH_ACCOUNT`, `CI_WATCH_DISABLE`.
 
 ## Tools
