@@ -1,4 +1,4 @@
-import { createSignal } from "solid-js"
+import { createMemo, createSignal } from "solid-js"
 import { Plugin, usePlugin } from "@opencode/plugin/tui"
 
 // PROTOTYPE: mocked watcher state. Replace with an RPC call to the server part once
@@ -142,18 +142,20 @@ function pad(value: string, width: number): string {
 
 function StatusCounts(props: { watch: Watch }) {
   const context = usePlugin()
-  const value = counts(props.watch)
-  const cells = [
-    { show: true, dot: STATE.pass.dot, text: `${value.passed}/${value.total}`, color: tone(context, "pass") },
-    { show: value.failed > 0, dot: STATE.fail.dot, text: String(value.failed), color: tone(context, "fail") },
-    { show: value.running > 0, dot: STATE.run.dot, text: String(value.running), color: tone(context, "run") },
-    { show: value.queued > 0, dot: STATE.queue.dot, text: String(value.queued), color: tone(context, "queue") },
-    { show: value.skipped > 0, dot: STATE.skip.dot, text: String(value.skipped), color: tone(context, "skip") },
-    { show: value.other > 0, dot: STATE.neutral.dot, text: String(value.other), color: tone(context, "neutral") },
-  ]
+  const cells = createMemo(() => {
+    const value = counts(props.watch)
+    return [
+      { show: true, dot: STATE.pass.dot, text: `${value.passed}/${value.total}`, color: tone(context, "pass") },
+      { show: value.failed > 0, dot: STATE.fail.dot, text: String(value.failed), color: tone(context, "fail") },
+      { show: value.running > 0, dot: STATE.run.dot, text: String(value.running), color: tone(context, "run") },
+      { show: value.queued > 0, dot: STATE.queue.dot, text: String(value.queued), color: tone(context, "queue") },
+      { show: value.skipped > 0, dot: STATE.skip.dot, text: String(value.skipped), color: tone(context, "skip") },
+      { show: value.other > 0, dot: STATE.neutral.dot, text: String(value.other), color: tone(context, "neutral") },
+    ]
+  })
   return (
     <box flexDirection="row" gap={1} flexShrink={0}>
-      {cells
+      {cells()
         .filter((cell) => cell.show)
         .map((cell) => (
           <text wrapMode="none">
@@ -185,14 +187,7 @@ function WatchLine(props: { watch: Watch; showRun?: boolean }) {
 function CheckLine(props: { check: Check; indent?: number; detail?: boolean }) {
   const context = usePlugin()
   return (
-    <box
-      flexDirection="row"
-      paddingLeft={props.indent ?? 0}
-      minWidth={0}
-      onMouseUp={() => {
-        context.ui.panel.open("ci")
-      }}
-    >
+    <box flexDirection="row" paddingLeft={props.indent ?? 0} minWidth={0}>
       <text fg={tone(context, props.check.state)}>{STATE[props.check.state].dot} </text>
       <text fg={context.theme.text.base}>{pad(props.check.name, props.detail ? 16 : 12)}</text>
       <text fg={tone(context, props.check.state)}>{pad(STATE[props.check.state].label, props.detail ? 10 : 8)}</text>
@@ -204,8 +199,8 @@ function CheckLine(props: { check: Check; indent?: number; detail?: boolean }) {
 function Sidebar() {
   const context = usePlugin()
   const [view, updateView] = context.storage.store("view", { initial: { open: true } })
-  const watches = demo()
-  const failed = watches.filter((watch) => overall(watch) === "fail").length
+  const watches = demo
+  const failed = createMemo(() => watches().filter((watch) => overall(watch) === "fail").length)
 
   return (
     <box flexDirection="column">
@@ -224,12 +219,12 @@ function Sidebar() {
         </text>
         {view.open ? null : (
           <text fg={context.theme.text.muted}>
-            ({watches.length} watched{failed > 0 ? `, ${failed} failed` : ""})
+            ({watches().length} watched{failed() > 0 ? `, ${failed()} failed` : ""})
           </text>
         )}
       </box>
       {view.open
-        ? watches.map((watch) => {
+        ? watches().map((watch) => {
             const attention = watch.checks.filter((check) => check.state === "fail" || check.state === "run")
             // Few checks: list them all. Many: only the ones that need attention.
             const listed = watch.checks.length <= 5 ? watch.checks : attention
@@ -246,30 +241,6 @@ function Sidebar() {
             )
           })
         : null}
-    </box>
-  )
-}
-
-function Panel() {
-  const context = usePlugin()
-  const watches = demo()
-  return (
-    <box flexDirection="column" padding={1}>
-      <box flexDirection="row" gap={1}>
-        <text fg={context.theme.text.base}>
-          <b>CI</b>
-        </text>
-        <text fg={context.theme.text.muted}>watched checks</text>
-      </box>
-      {watches.map((watch) => (
-        <box flexDirection="column" marginTop={1}>
-          <WatchLine watch={watch} showRun />
-          {watch.checks.map((check) => (
-            <CheckLine check={check} indent={2} detail />
-          ))}
-        </box>
-      ))}
-      <text fg={context.theme.text.faint}>esc closes · ctrl+f fullscreen</text>
     </box>
   )
 }
@@ -297,26 +268,6 @@ export default Plugin.define({
       append: "sidebar.content",
       render: () => <Sidebar />,
     })
-    context.ui.slot({
-      append: "session.panel",
-      render: (input) => (input.name === "ci" ? <Panel /> : <></>),
-    })
-    context.keymap.layer(() => ({
-      mode: "global",
-      commands: [
-        {
-          id: "ci.panel",
-          title: "CI: watched checks",
-          group: "CI",
-          palette: true,
-          slash: { name: "ci" },
-          enabled: () => true,
-          run: () => {
-            context.ui.panel.open("ci")
-          },
-        },
-      ],
-    }))
     return () => {
       stopTicks()
       clearInterval(timer)
