@@ -112,6 +112,13 @@ export class CiService {
     await this.deps.store.load()
     await this.deps.store.prune(this.now)
     if (this.deps.store.size > 0) await this.ensureForwarder()
+    const sessions = new Set(this.deps.store.list().map((entry) => entry.sessionID))
+    for (const sessionID of sessions) await this.refreshStatus(sessionID)
+    for (const target of new Map(this.deps.store.list().map((entry) => [targetKey(entry.target), entry.target])).values()) {
+      void this.reconcile(target).catch((error) => {
+        this.deps.log.warn(`cannot reconcile ${targetKey(target)}`, { error: errorMessage(error) })
+      })
+    }
   }
 
   async stop(): Promise<void> {

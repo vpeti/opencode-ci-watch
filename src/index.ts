@@ -19,6 +19,7 @@ import { registerTools } from "./tools.ts"
 
 const EVENTS = ["push", "workflow_run"] as const
 
+
 async function registerSkill(ctx: Plugin.Context): Promise<void> {
   await ctx.skill.transform((editor) => {
     editor.add({
