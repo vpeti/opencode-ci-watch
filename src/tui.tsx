@@ -18,6 +18,8 @@ interface Watch {
   checks: Check[]
   startedAt?: number
   finishedAt?: number
+  merged?: boolean
+  mergedAt?: number
 }
 
 const BASE: Watch[] = [
@@ -29,9 +31,9 @@ const BASE: Watch[] = [
       { name: "deny", state: "pass", duration: "48s" },
       { name: "model", state: "pass", duration: "10s" },
       { name: "provenance", state: "pass", duration: "8s" },
-      { name: "clippy", state: "fail", duration: "21s" },
-      { name: "test", state: "run", duration: "2m" },
-      { name: "aarch64", state: "queue" },
+      { name: "clippy", state: "pass", duration: "35s" },
+      { name: "test", state: "pass", duration: "2m17s" },
+      { name: "aarch64", state: "pass", duration: "1m04s" },
       { name: "bench", state: "skip" },
     ],
   },
@@ -45,9 +47,10 @@ const BASE: Watch[] = [
   },
 ]
 
-// One state table drives the summary glyphs, the list rows and the panel, so a new
-// conclusion only has to be added here. Glyphs follow the GitHub checks UI.
-const STATE: Record<CheckState, { dot: string; label: string; tone: "success" | "error" | "warning" | "muted" | "faint" }> = {
+const STATE: Record<
+  CheckState,
+  { dot: string; label: string; tone: "success" | "error" | "warning" | "muted" | "faint" }
+> = {
   pass: { dot: "●", label: "Passed", tone: "success" },
   fail: { dot: "●", label: "Failed", tone: "error" },
   run: { dot: "●", label: "Running", tone: "warning" },
@@ -56,6 +59,27 @@ const STATE: Record<CheckState, { dot: string; label: string; tone: "success" | 
   cancel: { dot: "●", label: "Cancelled", tone: "muted" },
   neutral: { dot: "●", label: "Neutral", tone: "muted" },
 }
+
+type Overall = "waiting" | "running" | "done" | "failed"
+
+// One overall dot per watched branch: empty orange while waiting, filled orange
+// while running, green when everything finished, red as soon as something failed.
+const OVERALL: Record<Overall, { dot: string; tone: CheckState }> = {
+  waiting: { dot: "○", tone: "queue" },
+  running: { dot: "●", tone: "run" },
+  done: { dot: "●", tone: "pass" },
+  failed: { dot: "●", tone: "fail" },
+}
+
+// GitHub's merged badge is purple.
+const MERGED = "#c084fc"
+
+const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+const SPIN_MS = 125
+
+const [demo, setDemo] = createSignal<Watch[]>([])
+const [frame, setFrame] = createSignal(0)
+const [now, setNow] = createSignal(Date.now())
 
 function tone(context: ReturnType<typeof usePlugin>, state: CheckState) {
   const feedback = context.theme.text.feedback
@@ -66,23 +90,6 @@ function tone(context: ReturnType<typeof usePlugin>, state: CheckState) {
   if (state === "skip") return context.theme.text.faint
   return context.theme.text.muted
 }
-
-// Demo clock: one state transition every 700ms, then a short hold and a reset.
-const initial = (): Watch[] =>
-  BASE.map((watch, index) => ({
-    ...watch,
-    checks: watch.checks.map((check) =>
-      index === 0
-        ? { ...check, state: check.state === "skip" ? "skip" : "queue", duration: undefined }
-        : { ...check },
-    ),
-  }))
-
-const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-
-const [demo, setDemo] = createSignal<Watch[]>(initial())
-const [frame, setFrame] = createSignal(0)
-const [now, setNow] = createSignal(Date.now())
 
 function clock(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000))
@@ -98,12 +105,57 @@ function elapsed(watch: Watch, at: number): string | undefined {
   return clock((watch.finishedAt ?? at) - watch.startedAt)
 }
 
+function counts(watch: Watch) {
+  const value = { total: watch.checks.length, passed: 0, failed: 0, running: 0, queued: 0, skipped: 0, other: 0 }
+  for (const check of watch.checks) {
+    if (check.state === "pass") value.passed += 1
+    else if (check.state === "fail") value.failed += 1
+    else if (check.state === "run") value.running += 1
+    else if (check.state === "queue") value.queued += 1
+    else if (check.state === "skip") value.skipped += 1
+    else value.other += 1
+  }
+  return value
+}
+
+function overall(watch: Watch): Overall {
+  const value = counts(watch)
+  if (value.failed > 0) return "failed"
+  if (value.running > 0) return "running"
+  if (value.queued > 0) return "waiting"
+  return "done"
+}
+
+function jobsHidden(watch: Watch, at: number): boolean {
+  if (watch.merged) return true
+  return watch.finishedAt !== undefined && overall(watch) === "done" && at - watch.finishedAt >= 5_000
+}
+
+// ---------------------------------------------------------------------------
+// Demo script
+
+const MAIN = BASE.find((watch) => watch.branch === "main")!
+const FEATURE = BASE.find((watch) => watch.branch === "feature/login")!
+
+function reset(template: Watch): Watch {
+  return {
+    branch: template.branch,
+    run: template.run,
+    checks: template.checks.map((check) => ({
+      name: check.name,
+      state: check.state === "skip" ? "skip" : "queue",
+    })),
+  }
+}
+
+const initial = (): Watch[] => [reset(FEATURE)]
+
 type Change = [name: string, state: CheckState, duration?: string]
 
-function apply(watches: Watch[], changes: Change[]): Watch[] {
+function setChecks(watches: Watch[], branch: string, changes: Change[]): Watch[] {
   const at = Date.now()
-  return watches.map((watch, index) => {
-    if (index !== 0) return watch
+  return watches.map((watch) => {
+    if (watch.branch !== branch || watch.merged) return watch
     let checks = watch.checks
     for (const [name, state, duration] of changes) {
       checks = checks.map((check) =>
@@ -120,78 +172,97 @@ function apply(watches: Watch[], changes: Change[]): Watch[] {
   })
 }
 
-const STEP = (...changes: Change[]) => () => setDemo((watches) => apply(watches, changes))
+function merge(watches: Watch[], branch: string): Watch[] {
+  const at = Date.now()
+  return watches.map((watch) =>
+    watch.branch === branch
+      ? {
+          ...watch,
+          merged: true,
+          mergedAt: at,
+          checks: watch.checks.map((check) => ({ ...check, since: undefined })),
+        }
+      : watch,
+  )
+}
 
-// Jobs start in parallel, like a real workflow: enough running time for the
-// per-job counters to climb, and the retry lets the cycle end all-green.
-const STEPS = [
-  STEP(
-    ["fmt", "run"],
-    ["deny", "run"],
-    ["model", "run"],
-    ["provenance", "run"],
-    ["test", "run"],
-    ["aarch64", "run"],
-  ),
-  STEP(
-    ["fmt", "pass", "11s"],
-    ["deny", "pass", "48s"],
-    ["model", "pass", "10s"],
-    ["provenance", "pass", "8s"],
-    ["clippy", "run"],
-  ),
-  STEP(["clippy", "fail", "21s"]),
-  STEP(["test", "pass", "2m17s"], ["aarch64", "pass", "1m04s"], ["clippy", "run"]),
-  STEP(["clippy", "pass", "35s"]),
+const SCRIPT: Array<{ at: number; run: () => void }> = [
+  {
+    at: 1.5,
+    run: () =>
+      setDemo((watches) =>
+        setChecks(watches, "feature/login", [
+          ["fmt", "run"],
+          ["test", "run"],
+        ]),
+      ),
+  },
+  {
+    at: 3,
+    run: () =>
+      setDemo((watches) =>
+        setChecks(watches, "feature/login", [
+          ["fmt", "pass", "9s"],
+          ["test", "pass", "2m17s"],
+        ]),
+      ),
+  },
+  { at: 4.5, run: () => setDemo((watches) => [...merge(watches, "feature/login"), reset(MAIN)]) },
+  {
+    at: 6,
+    run: () =>
+      setDemo((watches) =>
+        setChecks(watches, "main", [
+          ["fmt", "run"],
+          ["deny", "run"],
+          ["model", "run"],
+          ["provenance", "run"],
+          ["test", "run"],
+          ["aarch64", "run"],
+        ]),
+      ),
+  },
+  {
+    at: 7.5,
+    run: () =>
+      setDemo((watches) =>
+        setChecks(watches, "main", [
+          ["fmt", "pass", "11s"],
+          ["deny", "pass", "48s"],
+          ["model", "pass", "10s"],
+          ["provenance", "pass", "8s"],
+          ["clippy", "run"],
+        ]),
+      ),
+  },
+  { at: 9, run: () => setDemo((watches) => setChecks(watches, "main", [["clippy", "fail", "21s"]])) },
+  {
+    at: 10.5,
+    run: () =>
+      setDemo((watches) =>
+        setChecks(watches, "main", [
+          ["test", "pass", "2m17s"],
+          ["aarch64", "pass", "1m04s"],
+          ["clippy", "run"],
+        ]),
+      ),
+  },
+  { at: 12, run: () => setDemo((watches) => setChecks(watches, "main", [["clippy", "pass", "35s"]])) },
 ]
 
-type Overall = "waiting" | "running" | "done" | "failed"
+const CYCLE_SECONDS = 24
 
-// One overall dot per watched branch: empty orange while waiting, filled orange
-// while running, green when everything finished, red as soon as something failed.
-const OVERALL: Record<Overall, { dot: string; tone: CheckState }> = {
-  waiting: { dot: "○", tone: "queue" },
-  running: { dot: "●", tone: "run" },
-  done: { dot: "●", tone: "pass" },
-  failed: { dot: "●", tone: "fail" },
-}
-
-function overall(watch: Watch): Overall {
-  const value = counts(watch)
-  if (value.failed > 0) return "failed"
-  if (value.running > 0) return "running"
-  if (value.queued > 0) return "waiting"
-  return "done"
-}
-
-function counts(watch: Watch) {
-  const value = {
-    total: watch.checks.length,
-    passed: 0,
-    failed: 0,
-    running: 0,
-    queued: 0,
-    skipped: 0,
-    other: 0,
-  }
-  for (const check of watch.checks) {
-    if (check.state === "pass") value.passed += 1
-    else if (check.state === "fail") value.failed += 1
-    else if (check.state === "run") value.running += 1
-    else if (check.state === "queue") value.queued += 1
-    else if (check.state === "skip") value.skipped += 1
-    else value.other += 1
-  }
-  return value
-}
+// ---------------------------------------------------------------------------
+// Components
 
 function WatchLine(props: { watch: Watch }) {
   const context = usePlugin()
   const state = overall(props.watch)
   const time = createMemo(() => elapsed(props.watch, now()))
+  const dot = props.watch.merged ? MERGED : tone(context, OVERALL[state].tone)
   return (
     <box flexDirection="row" gap={1} minWidth={0}>
-      <text fg={tone(context, OVERALL[state].tone)} flexShrink={0}>
+      <text fg={dot} flexShrink={0}>
         {OVERALL[state].dot}
       </text>
       <text fg={context.theme.text.base} wrapMode="none" truncate flexGrow={1} flexShrink={1} minWidth={0}>
@@ -231,7 +302,11 @@ function Sidebar() {
   const context = usePlugin()
   const [view, updateView] = context.storage.store("view", { initial: { open: true } })
   const watches = demo
-  const failed = createMemo(() => watches().filter((watch) => overall(watch) === "failed").length)
+  // A merged branch lingers for five seconds, then its row is gone.
+  const visible = createMemo(() =>
+    watches().filter((watch) => !(watch.mergedAt !== undefined && now() - watch.mergedAt >= 5_000)),
+  )
+  const failed = createMemo(() => visible().filter((watch) => overall(watch) === "failed").length)
 
   return (
     <box flexDirection="column">
@@ -250,17 +325,17 @@ function Sidebar() {
         </text>
         {view.open ? null : (
           <text fg={context.theme.text.muted}>
-            ({watches().length} watched{failed() > 0 ? `, ${failed()} failed` : ""})
+            ({visible().length} watched{failed() > 0 ? `, ${failed()} failed` : ""})
           </text>
         )}
       </box>
       {view.open
-        ? watches().map((watch) => (
+        ? visible().map((watch) => (
             <box flexDirection="column">
               <WatchLine watch={watch} />
-              {watch.checks.map((check) => (
-                <CheckLine check={check} />
-              ))}
+              {jobsHidden(watch, now())
+                ? null
+                : watch.checks.map((check) => <CheckLine check={check} />)}
             </box>
           ))
         : null}
@@ -271,6 +346,23 @@ function Sidebar() {
 export default Plugin.define({
   id: "ci",
   setup(context) {
+    setDemo(initial())
+    let cycleStart = Date.now()
+    let next = 0
+    const timer = setInterval(() => {
+      const elapsedSeconds = (Date.now() - cycleStart) / 1000
+      if (elapsedSeconds >= CYCLE_SECONDS) {
+        setDemo(initial())
+        cycleStart = Date.now()
+        next = 0
+        return
+      }
+      while (next < SCRIPT.length && SCRIPT[next]!.at <= elapsedSeconds) {
+        SCRIPT[next]!.run()
+        next += 1
+      }
+    }, 250)
+
     let lastSecond = Math.floor(Date.now() / 1000)
     // The renderer's animation clock only ticks while it is drawing, so a
     // plugin-level subscriber can freeze between renders. A plain timer keeps
@@ -282,22 +374,8 @@ export default Plugin.define({
         lastSecond = second
         setNow(Date.now())
       }
-    }, 125)
-    let cursor = 0
-    let hold = 0
-    const timer = setInterval(() => {
-      if (cursor < STEPS.length) {
-        STEPS[cursor]!()
-        cursor += 1
-        return
-      }
-      hold += 1
-      if (hold > 2) {
-        hold = 0
-        cursor = 0
-        setDemo(initial())
-      }
-    }, 2000)
+    }, SPIN_MS)
+
     context.ui.slot({
       append: "sidebar.content",
       render: () => <Sidebar />,
