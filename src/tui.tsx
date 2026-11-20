@@ -192,7 +192,7 @@ function WatchLine(props: { watch: Watch }) {
   return (
     <box flexDirection="row" gap={1} minWidth={0}>
       <text fg={tone(context, OVERALL[state].tone)} flexShrink={0}>
-        {state === "running" ? SPINNER[frame() % SPINNER.length] : OVERALL[state].dot}
+        {OVERALL[state].dot}
       </text>
       <text fg={context.theme.text.base} wrapMode="none" truncate flexGrow={1} flexShrink={1} minWidth={0}>
         <b>{props.watch.branch}</b>
