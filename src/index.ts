@@ -128,6 +128,7 @@ export default Plugin.define({
       log: logger,
       beforeStart: () => hooks.snapshot(),
       onAttached: () => hooks.adopt(),
+      onStopped: () => hooks.removeOwned(),
     })
 
     const store = new SubscriptionStore(ctx.storage as unknown as StorageLike)

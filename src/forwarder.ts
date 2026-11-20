@@ -16,6 +16,8 @@ export interface ForwarderOptions {
   readonly beforeStart?: () => Promise<void> | void
   /** Runs once the websocket is attached, for example to adopt the dev webhook it created. */
   readonly onAttached?: () => Promise<void> | void
+  /** Runs after the process stops for good, for example to delete the dev webhook. */
+  readonly onStopped?: () => Promise<void> | void
 }
 
 const BACKOFF_MS = [1_000, 5_000, 20_000, 60_000]
@@ -191,5 +193,6 @@ export class Forwarder {
     })
     this.child = undefined
     this.current = "stopped"
+    await this.options.onStopped?.()
   }
 }
