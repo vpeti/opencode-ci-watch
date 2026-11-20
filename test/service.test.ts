@@ -143,7 +143,7 @@ test("a green run updates the status line without waking by default", async () =
   assert.ok(delivery)
   await h.service.onDelivery(delivery)
   assert.equal(h.wakes.length, 0)
-  assert.match(h.statuses.get("ses_1") ?? "", /✅ r1002/)
+  assert.match(h.statuses.get("ses_1") ?? "", /✅ 1\/1 green/)
 })
 
 test("notify: all wakes on success", async () => {
@@ -179,4 +179,24 @@ test("unwatch all removes subscriptions and clears the status entry", async () =
   assert.match(result.content, /stopped watching 1/)
   assert.equal(h.store.size, 0)
   assert.equal(h.statuses.get("ses_1"), undefined)
+})
+
+test("a quick green workflow does not hide a still-running one on the same commit", async () => {
+  const h = harness()
+  await h.service.watch("ses_1", { branch: "main" })
+
+  const sha = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
+  const merge = normalizeDelivery("workflow_run", workflowRunPayload({ id: 2002, name: "Auto-merge", conclusion: "success" }))
+  const pending = normalizeDelivery("workflow_run", {
+    ...workflowRunPayload({ id: 2001, name: "CI", conclusion: null }),
+    workflow_run: { ...workflowRunPayload({ id: 2001, name: "CI", conclusion: null }).workflow_run, status: "queued" },
+  })
+  assert.ok(merge && pending)
+  await h.service.onDelivery(merge)
+  await h.service.onDelivery(pending)
+
+  const status = h.statuses.get("ses_1") ?? ""
+  assert.match(status, /⏳ 1 running/)
+  assert.doesNotMatch(status, /✅/)
+  assert.match(status, new RegExp(sha.slice(0, 7)))
 })

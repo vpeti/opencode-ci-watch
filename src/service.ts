@@ -8,7 +8,6 @@ import { describeTarget, matchesPush, matchesRun, targetKey, targetMatchesDelive
 import type { Notifier } from "./notify.ts"
 import {
   conclusionEmoji,
-  relativeTime,
   renderFailure,
   renderJobs,
   renderPush,
@@ -194,6 +193,34 @@ export class CiService {
     return { type: "branch", value: await this.currentBranch() }
   }
 
+  /** Aggregates every run for the newest commit of a branch/sha, so one quick workflow cannot hide a pending one. */
+  private summaryFor(target: Target): string {
+    if (target.type === "run") {
+      const run = this.deps.cache.get(this.slug, Number(target.value))
+      return run ? `${conclusionEmoji(run.conclusion)} ${run.name} ${run.conclusion ?? run.status}` : "no run yet"
+    }
+    const runs =
+      target.type === "branch"
+        ? this.deps.cache.forBranch(this.slug, target.value, 20)
+        : this.deps.cache.forSha(this.slug, target.value, 20)
+    if (runs.length === 0) return "no runs yet"
+    const newest = [...runs].sort(
+      (left, right) =>
+        (Date.parse(right.createdAt ?? "") || 0) - (Date.parse(left.createdAt ?? "") || 0) || right.id - left.id,
+    )[0]!
+    const sha = newest.sha
+    const forSha = runs.filter((run) => run.sha === sha)
+    const running = forSha.filter((run) => !isTerminal(run)).length
+    const failed = forSha.filter(isFailure).length
+    const green = forSha.filter(isSuccess).length
+    const parts: string[] = []
+    if (running > 0) parts.push(`⏳ ${running} running`)
+    if (failed > 0) parts.push(`❌ ${failed}/${forSha.length} failed`)
+    if (running === 0 && failed === 0) parts.push(`✅ ${green}/${forSha.length} green`)
+    const label = sha ? ` · ${sha.slice(0, 7)}` : ""
+    return `${parts.join(" · ")}${label}`
+  }
+
   private latestRun(target: Target): RunInfo | undefined {
     const base = this.deps.cache
     if (target.type === "branch") return base.forBranch(this.slug, target.value, 1)[0]
@@ -234,8 +261,7 @@ export class CiService {
     await this.refreshStatus(sessionID)
     void this.reconcile(target).catch((error) => this.deps.log.warn(`cannot reconcile ${targetKey(target)}`, { error: errorMessage(error) }))
 
-    const latest = this.latestRun(target)
-    const status = latest ? `${conclusionEmoji(latest.conclusion)} r${latest.id}` : "no runs seen yet"
+    const status = this.summaryFor(target)
     return {
       content: `👀 watching ${describeTarget(target)} (${include.join("+")}) · ${status} · id ${subscription.id}`,
       metadata: { id: subscription.id, target, include, notify: subscription.notify, sessionID },
@@ -301,14 +327,11 @@ export class CiService {
     }
     const lines: string[] = []
     for (const sub of subs.slice(0, MAX_STATUS_LINES)) {
-      const latest = this.latestRun(sub.target)
-      const marker = sub.include.includes("pushes") && !sub.include.includes("runs") ? "⤴️" : conclusionEmoji(latest?.conclusion ?? null)
-      const detail = latest
-        ? `${marker} r${latest.id} ${relativeTime(latest.updatedAt ?? latest.createdAt, this.now)}`.trim()
-        : "no runs yet"
       const modes = [sub.include.includes("runs") ? "runs" : undefined, sub.include.includes("pushes") ? "pushes" : undefined]
         .filter(Boolean)
         .join("+")
+      const detail =
+        sub.include.includes("pushes") && !sub.include.includes("runs") ? "watching pushes" : this.summaryFor(sub.target)
       lines.push(`👀 ${describeTarget(sub.target)} · ${modes} · ${detail}`)
     }
     if (subs.length > MAX_STATUS_LINES) lines.push(`… ${subs.length - MAX_STATUS_LINES} more`)
