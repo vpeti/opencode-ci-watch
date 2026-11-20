@@ -9,12 +9,15 @@ interface Check {
   name: string
   state: CheckState
   duration?: string
+  since?: number
 }
 
 interface Watch {
   branch: string
   run: number
   checks: Check[]
+  startedAt?: number
+  finishedAt?: number
 }
 
 const BASE: Watch[] = [
@@ -45,13 +48,13 @@ const BASE: Watch[] = [
 // One state table drives the summary glyphs, the list rows and the panel, so a new
 // conclusion only has to be added here. Glyphs follow the GitHub checks UI.
 const STATE: Record<CheckState, { dot: string; label: string; tone: "success" | "error" | "warning" | "muted" | "faint" }> = {
-  pass: { dot: "●", label: "passed", tone: "success" },
-  fail: { dot: "●", label: "failed", tone: "error" },
-  run: { dot: "●", label: "running", tone: "warning" },
-  queue: { dot: "○", label: "queued", tone: "warning" },
-  skip: { dot: "○", label: "skipped", tone: "faint" },
-  cancel: { dot: "●", label: "cancelled", tone: "muted" },
-  neutral: { dot: "●", label: "neutral", tone: "muted" },
+  pass: { dot: "●", label: "Passed", tone: "success" },
+  fail: { dot: "●", label: "Failed", tone: "error" },
+  run: { dot: "●", label: "Running", tone: "warning" },
+  queue: { dot: "○", label: "Queued", tone: "warning" },
+  skip: { dot: "○", label: "Skipped", tone: "faint" },
+  cancel: { dot: "●", label: "Cancelled", tone: "muted" },
+  neutral: { dot: "●", label: "Neutral", tone: "muted" },
 }
 
 function tone(context: ReturnType<typeof usePlugin>, state: CheckState) {
@@ -77,16 +80,35 @@ const initial = (): Watch[] =>
 
 const [demo, setDemo] = createSignal<Watch[]>(initial())
 const [pulse, setPulse] = createSignal(0)
+const [now, setNow] = createSignal(Date.now())
+
+function clock(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  const hours = Math.floor(total / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  const seconds = total % 60
+  const tail = `${minutes}:${String(seconds).padStart(2, "0")}`
+  return hours > 0 ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}` : tail
+}
+
+function elapsed(watch: Watch, at: number): string | undefined {
+  if (!watch.startedAt) return undefined
+  return clock((watch.finishedAt ?? at) - watch.startedAt)
+}
 
 function transition(watches: Watch[], name: string, state: CheckState, duration?: string): Watch[] {
-  return watches.map((watch, index) =>
-    index !== 0
-      ? watch
-      : {
-          ...watch,
-          checks: watch.checks.map((check) => (check.name === name ? { ...check, state, duration } : check)),
-        },
-  )
+  const at = Date.now()
+  return watches.map((watch, index) => {
+    if (index !== 0) return watch
+    const checks = watch.checks.map((check) =>
+      check.name === name ? { ...check, state, duration, since: state === "run" ? at : undefined } : check,
+    )
+    const running = checks.some((check) => check.state === "run")
+    const pending = checks.some((check) => check.state === "run" || check.state === "queue")
+    const startedAt = watch.startedAt ?? (running ? at : undefined)
+    const finishedAt = watch.finishedAt ?? (startedAt !== undefined && !pending ? at : undefined)
+    return { ...watch, checks, startedAt, finishedAt }
+  })
 }
 
 const STEP = (name: string, state: CheckState, duration?: string) => () =>
@@ -154,18 +176,29 @@ function counts(watch: Watch) {
 function WatchLine(props: { watch: Watch }) {
   const context = usePlugin()
   const state = overall(props.watch)
+  const time = createMemo(() => elapsed(props.watch, now()))
   return (
     <box flexDirection="row" gap={1} minWidth={0}>
-      <text fg={tone(context, OVERALL[state].tone)}>{OVERALL[state].dot}</text>
-      <text fg={context.theme.text.base} wrapMode="none" truncate flexShrink={1} minWidth={0}>
+      <text fg={tone(context, OVERALL[state].tone)} flexShrink={0}>
+        {OVERALL[state].dot}
+      </text>
+      <text fg={context.theme.text.base} wrapMode="none" truncate flexGrow={1} flexShrink={1} minWidth={0}>
         <b>{props.watch.branch}</b>
       </text>
+      {time() ? (
+        <text fg={context.theme.text.muted} flexShrink={0}>
+          {time()}
+        </text>
+      ) : null}
     </box>
   )
 }
 
 function CheckLine(props: { check: Check }) {
   const context = usePlugin()
+  const time = createMemo(() =>
+    props.check.state === "run" && props.check.since ? clock(now() - props.check.since) : undefined,
+  )
   return (
     <box flexDirection="row" gap={1} minWidth={0}>
       <text fg={tone(context, props.check.state)} flexShrink={0}>
@@ -174,9 +207,10 @@ function CheckLine(props: { check: Check }) {
       <text fg={context.theme.text.muted} wrapMode="none" truncate flexGrow={1} flexShrink={1} minWidth={0}>
         {props.check.name}
       </text>
-      <text fg={tone(context, props.check.state)} flexShrink={0}>
-        {STATE[props.check.state].label}
-      </text>
+      <box flexDirection="row" gap={1} flexShrink={0}>
+        {time() ? <text fg={context.theme.text.muted}>{time()}</text> : null}
+        <text fg={tone(context, props.check.state)}>{STATE[props.check.state].label}</text>
+      </box>
     </box>
   )
 }
@@ -225,7 +259,15 @@ function Sidebar() {
 export default Plugin.define({
   id: "ci",
   setup(context) {
-    const stopTicks = context.renderer.onAnimationTick(4, (_delta, ticks) => setPulse(ticks % 2))
+    let lastSecond = Math.floor(Date.now() / 1000)
+    const stopTicks = context.renderer.onAnimationTick(4, (_delta, ticks) => {
+      setPulse(ticks % 2)
+      const second = Math.floor(Date.now() / 1000)
+      if (second !== lastSecond) {
+        lastSecond = second
+        setNow(Date.now())
+      }
+    })
     let cursor = 0
     let hold = 0
     const timer = setInterval(() => {
