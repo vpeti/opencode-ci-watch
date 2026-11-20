@@ -78,17 +78,36 @@ export class Enricher {
       .filter((entry): entry is RunInfo => entry !== undefined)
   }
 
+  /**
+   * The runs for one commit. GitHub's `head_sha` filter only matches a full sha —
+   * an abbreviation silently returns nothing — so resolve it first and also filter
+   * client-side in case the API ignores the parameter altogether.
+   */
   async runsForSha(sha: string, limit = 5, signal?: AbortSignal): Promise<RunInfo[]> {
-    // `head_sha` is not accepted by every API version; filter client-side so this stays correct either way.
-    const query = `repos/${this.repo.slug}/actions/runs?head_sha=${encodeURIComponent(sha)}&per_page=20`
+    const full = await this.fullSha(sha, signal)
+    const query = `repos/${this.repo.slug}/actions/runs?head_sha=${encodeURIComponent(full)}&per_page=20`
     const data = await this.gh.json<{ workflow_runs?: unknown[] }>(
       ["api", query, "--jq", "{workflow_runs: [.workflow_runs[]]}"],
       { signal },
     )
-    const wanted = sha.toLowerCase()
+    const wanted = full.toLowerCase()
     return (data.workflow_runs ?? [])
       .map((entry) => toRunInfo(entry))
       .filter((entry): entry is RunInfo => entry !== undefined && entry.sha.toLowerCase().startsWith(wanted))
       .slice(0, limit)
+  }
+
+  /** Expand an abbreviated commit sha; on failure keep the input and let the caller filter. */
+  private async fullSha(sha: string, signal?: AbortSignal): Promise<string> {
+    if (sha.length >= 40) return sha
+    try {
+      const data = await this.gh.json<{ sha?: string }>(
+        ["api", `repos/${this.repo.slug}/commits/${encodeURIComponent(sha)}`, "--jq", "{sha: .sha}"],
+        { signal },
+      )
+      return typeof data.sha === "string" && data.sha.length >= 40 ? data.sha : sha
+    } catch {
+      return sha
+    }
   }
 }
