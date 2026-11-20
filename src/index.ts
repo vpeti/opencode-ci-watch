@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto"
 import { Plugin, Skill } from "@opencode/plugin"
-import { applyAgentTransforms } from "./agents.ts"
+import { applyAgentTransforms, ruleFor } from "./agents.ts"
 import { loadConfig, type Config } from "./config.ts"
 import { normalizeDelivery } from "./events.ts"
 import { Forwarder } from "./forwarder.ts"
@@ -176,6 +176,8 @@ export default Plugin.define({
     if (config.autoSubscribe.onPush) {
       await ctx.tool.hook("execute.after", (event) => {
         if (event.tool !== "shell" || event.status !== "completed") return
+        const rule = ruleFor(config.agents, event.agent)
+        if (rule?.tools && rule.tools !== "all") return
         const command = (event.input as { command?: unknown } | undefined)?.command
         if (typeof command !== "string") return
         if (!/\bgit\s+push\b/.test(command)) return
