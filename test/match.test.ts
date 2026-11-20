@@ -7,6 +7,7 @@ import { run } from "./helpers.ts"
 function subscription(overrides: Partial<Subscription> = {}): Subscription {
   return {
     id: "s1",
+    repo: "acme/widgets",
     sessionID: "ses_1",
     target: { type: "branch", value: "main" },
     include: ["runs"],

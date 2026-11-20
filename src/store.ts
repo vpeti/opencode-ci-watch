@@ -6,6 +6,7 @@ export type DeliveryMode = "queue" | "steer"
 
 export interface Subscription {
   readonly id: string
+  readonly repo: string
   readonly sessionID: string
   readonly target: Target
   readonly include: readonly Include[]
@@ -36,6 +37,7 @@ function isSubscription(value: unknown): value is Subscription {
   const target = entry.target as Record<string, unknown> | undefined
   return (
     typeof entry.id === "string" &&
+    typeof entry.repo === "string" &&
     typeof entry.sessionID === "string" &&
     typeof entry.expiresAt === "number" &&
     typeof entry.createdAt === "number" &&
@@ -49,10 +51,16 @@ function isSubscription(value: unknown): value is Subscription {
 
 export class SubscriptionStore {
   private readonly storage: StorageLike
+  private readonly repo: string
   private readonly entries = new Map<string, Subscription>()
 
-  constructor(storage: StorageLike) {
+  constructor(storage: StorageLike, repo: string) {
     this.storage = storage
+    this.repo = repo
+  }
+
+  private key(id: string): string {
+    return `${PREFIX}${this.repo}/${id}`
   }
 
   async load(): Promise<void> {
@@ -60,7 +68,9 @@ export class SubscriptionStore {
     do {
       const page = await this.storage.scan({ prefix: PREFIX, after: cursor, limit: 100 })
       for (const entry of page.entries) {
-        if (isSubscription(entry.value)) this.entries.set(entry.value.id, entry.value)
+        if (isSubscription(entry.value) && entry.value.repo === this.repo) {
+          this.entries.set(entry.value.id, entry.value)
+        }
       }
       cursor = page.next
     } while (cursor)
@@ -75,13 +85,14 @@ export class SubscriptionStore {
   }
 
   async save(subscription: Subscription): Promise<void> {
-    this.entries.set(subscription.id, subscription)
-    await this.storage.set(`${PREFIX}${subscription.id}`, subscription)
+    const entry = { ...subscription, repo: this.repo }
+    this.entries.set(entry.id, entry)
+    await this.storage.set(this.key(entry.id), entry)
   }
 
   async remove(id: string): Promise<boolean> {
     if (!this.entries.delete(id)) return false
-    await this.storage.remove(`${PREFIX}${id}`)
+    await this.storage.remove(this.key(id))
     return true
   }
 

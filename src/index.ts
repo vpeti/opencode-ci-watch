@@ -143,7 +143,7 @@ export default Plugin.define({
       onStopped: () => hooks.removeOwned(),
     })
 
-    const store = new SubscriptionStore(ctx.storage as unknown as StorageLike)
+    const store = new SubscriptionStore(ctx.storage as unknown as StorageLike, repo.slug)
     const notifier = new Notifier(ctx.session as unknown as SessionApiLike, logger)
     const ci = new CiService({
       repo,

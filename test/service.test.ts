@@ -92,7 +92,7 @@ function harness(options: { recent?: () => Promise<ReturnType<typeof run>[]>; no
   } as unknown as Forwarder
 
   const changes: string[] = []
-  const store = new SubscriptionStore(storage())
+  const store = new SubscriptionStore(storage(), "acme/widgets")
   const jobs = new JobCache()
   const service = new CiService({
     repo: { owner: "acme", name: "widgets", slug: "acme/widgets" },

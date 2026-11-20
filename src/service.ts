@@ -303,6 +303,7 @@ export class CiService {
       ? { ...existing, expiresAt, notify, delivery, mergedAt: undefined }
       : {
           id: this.deps.id?.() ?? randomUUID().slice(0, 8),
+          repo: this.slug,
           sessionID,
           target,
           include,

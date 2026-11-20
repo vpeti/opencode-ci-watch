@@ -28,9 +28,10 @@ function memoryStorage(): StorageLike & { data: Map<string, unknown> } {
 
 test("stores subscriptions durably and reloads them", async () => {
   const storage = memoryStorage()
-  const store = new SubscriptionStore(storage)
+  const store = new SubscriptionStore(storage, "acme/widgets")
   await store.save({
     id: "abc",
+    repo: "acme/widgets",
     sessionID: "ses_1",
     target: { type: "branch", value: "main" },
     include: ["runs"],
@@ -40,16 +41,17 @@ test("stores subscriptions durably and reloads them", async () => {
     expiresAt: 10,
   })
 
-  const reloaded = new SubscriptionStore(storage)
+  const reloaded = new SubscriptionStore(storage, "acme/widgets")
   await reloaded.load()
   assert.equal(reloaded.list().length, 1)
   assert.equal(reloaded.bySession("ses_1")[0]?.target.value, "main")
 })
 
 test("prunes expired subscriptions", async () => {
-  const store = new SubscriptionStore(memoryStorage())
+  const store = new SubscriptionStore(memoryStorage(), "acme/widgets")
   await store.save({
     id: "old",
+    repo: "acme/widgets",
     sessionID: "ses_1",
     target: { type: "branch", value: "main" },
     include: ["runs"],
@@ -75,4 +77,39 @@ test("run cache keeps runs per repository and branch", () => {
   assert.equal(cache.forBranch("other/repo", "main").length, 1)
   assert.equal(cache.forSha("acme/widgets", "a1b2c3d").length, 2)
   assert.equal(cache.get("acme/widgets", 1)?.id, 1)
+})
+
+test("keeps subscriptions scoped to their repository", async () => {
+  const storage = memoryStorage()
+  const widgets = new SubscriptionStore(storage, "acme/widgets")
+  const other = new SubscriptionStore(storage, "acme/other")
+
+  await widgets.save({
+    id: "widgets",
+    repo: "acme/widgets",
+    sessionID: "ses_1",
+    target: { type: "branch", value: "main" },
+    include: ["runs"],
+    notify: "failures",
+    delivery: "queue",
+    createdAt: 1,
+    expiresAt: 10,
+  })
+  await storage.set("sub/legacy", {
+    id: "legacy",
+    sessionID: "ses_1",
+    target: { type: "branch", value: "main" },
+    include: ["runs"],
+    notify: "failures",
+    delivery: "queue",
+    createdAt: 1,
+    expiresAt: 10,
+  })
+
+  await other.load()
+  assert.equal(other.list().length, 0)
+
+  await widgets.load()
+  assert.equal(widgets.list().length, 1)
+  assert.equal(widgets.list()[0]?.repo, "acme/widgets")
 })
