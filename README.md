@@ -136,24 +136,15 @@ test transpiler in the dependency tree.
 
 `PLAN.md` is intentionally not tracked; it is a local design document.
 
-## TUI prototype
+## TUI
 
-`src/tui.tsx` exports a TUI part backed by mock data: a `CI` section in the sidebar with one
-summary line per watched branch and only the failing/running checks, plus a `session.panel` with
-every check name, status label and duration. Open it from the command palette (`CI: watched
-checks`) or `/ci`.
+`src/tui.tsx` renders a live CI section in the sidebar from `ci.state`:
 
-It is deliberately not wired to the server part yet; delete the `./tui` export from
-`package.json` to remove it.
+- one row per branch subscription, with the default branch pinned first;
+- an overall state dot (waiting/running/done/failed) and, once running, the workflow timer;
+- every check with a grey name, a spinner while running, a timer and a right-aligned state label;
+- merged branches turn purple, drop their jobs, and stay until the subscription ends;
+- all-green branches collapse their jobs after five seconds but keep the row.
 
-## Dashboard state
-
-The server forwards `workflow_job` and `pull_request` in addition to `push` and
-`workflow_run`, caches per-job state in workflow order, resolves the repository's default branch,
-and exposes the TUI contract over RPC:
-
-- `ci.state({ sessionID })` → `{ defaultBranch, watches }`, with the latest run, job states and
-  timestamps for every subscription of that session;
-- `ci.updated` → `{ sessionID }`, emitted after a run, job, merge or subscription change.
-
-The TUI part still renders mock data; wiring it to this RPC is the next step.
+The section refreshes from the `ci.updated` RPC event and hides itself when the repository has no
+watches or the server plugin is unavailable.
