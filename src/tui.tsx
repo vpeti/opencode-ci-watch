@@ -50,11 +50,11 @@ const DOT: Record<CheckState, string> = {
 }
 
 const LABEL: Record<CheckState, string> = {
-  pass: "pass",
-  fail: "fail",
-  run: "run",
-  queue: "queue",
-  skip: "skip",
+  pass: "passed",
+  fail: "failed",
+  run: "running",
+  queue: "queued",
+  skip: "skipped",
 }
 
 function tone(context: ReturnType<typeof usePlugin>, state: CheckState) {
@@ -72,13 +72,20 @@ function overall(watch: Watch): CheckState {
   return "pass"
 }
 
+function counts(watch: Watch) {
+  return {
+    total: watch.checks.length,
+    passed: watch.checks.filter((check) => check.state === "pass").length,
+    failed: watch.checks.filter((check) => check.state === "fail").length,
+    running: watch.checks.filter((check) => check.state === "run" || check.state === "queue").length,
+  }
+}
+
 function summary(watch: Watch): string {
-  const passed = watch.checks.filter((check) => check.state === "pass").length
-  const failed = watch.checks.filter((check) => check.state === "fail").length
-  const running = watch.checks.filter((check) => check.state === "run" || check.state === "queue").length
-  const parts = [`${passed}/${watch.checks.length}`]
-  if (failed > 0) parts.push(`${failed} fail`)
-  if (running > 0) parts.push(`${running} run`)
+  const value = counts(watch)
+  const parts = [`${value.passed}/${value.total} passed`]
+  if (value.failed > 0) parts.push(`${value.failed} failed`)
+  if (value.running > 0) parts.push(`${value.running} running`)
   return parts.join(" · ")
 }
 
@@ -89,11 +96,17 @@ function pad(value: string, width: number): string {
 function WatchLine(props: { watch: Watch; showRun?: boolean }) {
   const context = usePlugin()
   return (
-    <box flexDirection="row">
-      <text fg={tone(context, overall(props.watch))}>{DOT[overall(props.watch)]} </text>
-      <text fg={context.theme.text.base}>{props.watch.branch}</text>
-      <text fg={context.theme.text.muted}>  {summary(props.watch)}</text>
-      {props.showRun ? <text fg={context.theme.text.faint}>  run {props.watch.run}</text> : null}
+    <box flexDirection="row" gap={1}>
+      <text fg={tone(context, overall(props.watch))}>{DOT[overall(props.watch)]}</text>
+      <text fg={context.theme.text.base}>
+        <b>{props.watch.branch}</b>
+      </text>
+      <text fg={context.theme.text.muted}>{summary(props.watch)}</text>
+      {props.showRun ? (
+        <text fg={context.theme.text.faint}>
+          · run {props.watch.run}
+        </text>
+      ) : null}
     </box>
   )
 }
@@ -101,10 +114,17 @@ function WatchLine(props: { watch: Watch; showRun?: boolean }) {
 function CheckLine(props: { check: Check; indent?: number; detail?: boolean }) {
   const context = usePlugin()
   return (
-    <box flexDirection="row" paddingLeft={props.indent ?? 0}>
+    <box
+      flexDirection="row"
+      paddingLeft={props.indent ?? 0}
+      minWidth={0}
+      onMouseUp={() => {
+        context.ui.panel.open("ci")
+      }}
+    >
       <text fg={tone(context, props.check.state)}>{DOT[props.check.state]} </text>
       <text fg={context.theme.text.base}>{pad(props.check.name, props.detail ? 16 : 12)}</text>
-      <text fg={tone(context, props.check.state)}>{pad(LABEL[props.check.state], 6)}</text>
+      <text fg={tone(context, props.check.state)}>{pad(LABEL[props.check.state], 8)}</text>
       {props.detail ? <text fg={context.theme.text.faint}>{props.check.duration ?? ""}</text> : null}
     </box>
   )
@@ -112,23 +132,48 @@ function CheckLine(props: { check: Check; indent?: number; detail?: boolean }) {
 
 function Sidebar() {
   const context = usePlugin()
+  const [view, updateView] = context.storage.store("view", { initial: { open: true } })
+  const failed = WATCHES.filter((watch) => overall(watch) === "fail").length
+
   return (
-    <box flexDirection="column" paddingLeft={1}>
-      <text fg={context.theme.text.muted}>CI</text>
-      {WATCHES.map((watch) => {
-        const attention = watch.checks.filter((check) => check.state === "fail" || check.state === "run")
-        // Few checks: list them all. Many: only the ones that need attention.
-        const listed = watch.checks.length <= 5 ? watch.checks : attention
-        return (
-          <box flexDirection="column">
-            <WatchLine watch={watch} />
-            {listed.slice(0, 4).map((check) => (
-              <CheckLine check={check} indent={2} />
-            ))}
-            {listed.length > 4 ? <text fg={context.theme.text.faint}>  … {listed.length - 4} more</text> : null}
-          </box>
-        )
-      })}
+    <box flexDirection="column">
+      <box
+        flexDirection="row"
+        gap={1}
+        onMouseDown={() => {
+          void updateView((draft) => {
+            draft.open = !draft.open
+          }).catch((error) => console.error("Failed to persist CI sidebar state", error))
+        }}
+      >
+        <text fg={context.theme.text.base}>{view.open ? "▼" : "▶"}</text>
+        <text fg={context.theme.text.base}>
+          <b>CI</b>
+        </text>
+        {view.open ? null : (
+          <text fg={context.theme.text.muted}>
+            ({WATCHES.length} watched{failed > 0 ? `, ${failed} failed` : ""})
+          </text>
+        )}
+      </box>
+      {view.open
+        ? WATCHES.map((watch) => {
+            const attention = watch.checks.filter((check) => check.state === "fail" || check.state === "run")
+            // Few checks: list them all. Many: only the ones that need attention.
+            const listed = watch.checks.length <= 5 ? watch.checks : attention
+            return (
+              <box flexDirection="column">
+                <WatchLine watch={watch} />
+                {listed.slice(0, 4).map((check) => (
+                  <CheckLine check={check} indent={2} />
+                ))}
+                {listed.length > 4 ? (
+                  <text fg={context.theme.text.faint}>  … {listed.length - 4} more</text>
+                ) : null}
+              </box>
+            )
+          })
+        : null}
     </box>
   )
 }
@@ -137,9 +182,11 @@ function Panel() {
   const context = usePlugin()
   return (
     <box flexDirection="column" padding={1}>
-      <box flexDirection="row">
-        <text fg={context.theme.text.base}>CI</text>
-        <text fg={context.theme.text.muted}>  watched checks</text>
+      <box flexDirection="row" gap={1}>
+        <text fg={context.theme.text.base}>
+          <b>CI</b>
+        </text>
+        <text fg={context.theme.text.muted}>watched checks</text>
       </box>
       {WATCHES.map((watch) => (
         <box flexDirection="column" marginTop={1}>
