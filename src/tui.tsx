@@ -96,13 +96,20 @@ function elapsed(watch: Watch, at: number): string | undefined {
   return clock((watch.finishedAt ?? at) - watch.startedAt)
 }
 
-function transition(watches: Watch[], name: string, state: CheckState, duration?: string): Watch[] {
+type Change = [name: string, state: CheckState, duration?: string]
+
+function apply(watches: Watch[], changes: Change[]): Watch[] {
   const at = Date.now()
   return watches.map((watch, index) => {
     if (index !== 0) return watch
-    const checks = watch.checks.map((check) =>
-      check.name === name ? { ...check, state, duration, since: state === "run" ? at : undefined } : check,
-    )
+    let checks = watch.checks
+    for (const [name, state, duration] of changes) {
+      checks = checks.map((check) =>
+        check.name === name
+          ? { ...check, state, duration, since: state === "run" ? (check.since ?? at) : undefined }
+          : check,
+      )
+    }
     const running = checks.some((check) => check.state === "run")
     const pending = checks.some((check) => check.state === "run" || check.state === "queue")
     const startedAt = watch.startedAt ?? (running ? at : undefined)
@@ -111,26 +118,29 @@ function transition(watches: Watch[], name: string, state: CheckState, duration?
   })
 }
 
-const STEP = (name: string, state: CheckState, duration?: string) => () =>
-  setDemo((watches) => transition(watches, name, state, duration))
+const STEP = (...changes: Change[]) => () => setDemo((watches) => apply(watches, changes))
 
+// Jobs start in parallel, like a real workflow: enough running time for the
+// per-job counters to climb, and the retry lets the cycle end all-green.
 const STEPS = [
-  STEP("fmt", "run"),
-  STEP("fmt", "pass", "11s"),
-  STEP("deny", "run"),
-  STEP("deny", "pass", "48s"),
-  STEP("model", "run"),
-  STEP("model", "pass", "10s"),
-  STEP("provenance", "run"),
-  STEP("provenance", "pass", "8s"),
-  STEP("clippy", "run"),
-  STEP("clippy", "fail", "21s"),
-  STEP("test", "run"),
-  STEP("test", "pass", "2m17s"),
-  STEP("aarch64", "run"),
-  STEP("aarch64", "pass", "1m04s"),
-  STEP("clippy", "run"),
-  STEP("clippy", "pass", "35s"),
+  STEP(
+    ["fmt", "run"],
+    ["deny", "run"],
+    ["model", "run"],
+    ["provenance", "run"],
+    ["test", "run"],
+    ["aarch64", "run"],
+  ),
+  STEP(
+    ["fmt", "pass", "11s"],
+    ["deny", "pass", "48s"],
+    ["model", "pass", "10s"],
+    ["provenance", "pass", "8s"],
+    ["clippy", "run"],
+  ),
+  STEP(["clippy", "fail", "21s"]),
+  STEP(["test", "pass", "2m17s"], ["aarch64", "pass", "1m04s"], ["clippy", "run"]),
+  STEP(["clippy", "pass", "35s"]),
 ]
 
 type Overall = "waiting" | "running" | "done" | "failed"
@@ -277,12 +287,12 @@ export default Plugin.define({
         return
       }
       hold += 1
-      if (hold > 4) {
+      if (hold > 3) {
         hold = 0
         cursor = 0
         setDemo(initial())
       }
-    }, 700)
+    }, 1500)
     context.ui.slot({
       append: "sidebar.content",
       render: () => <Sidebar />,
