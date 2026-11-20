@@ -107,12 +107,27 @@ const STEPS = [
   STEP("test", "pass", "2m17s"),
   STEP("aarch64", "run"),
   STEP("aarch64", "pass", "1m04s"),
+  STEP("clippy", "run"),
+  STEP("clippy", "pass", "35s"),
 ]
 
-function overall(watch: Watch): CheckState {
-  if (watch.checks.some((check) => check.state === "fail")) return "fail"
-  if (watch.checks.some((check) => check.state === "run" || check.state === "queue")) return "run"
-  return "pass"
+type Overall = "waiting" | "running" | "done" | "failed"
+
+// One overall dot per watched branch: empty orange while waiting, filled orange
+// while running, green when everything finished, red as soon as something failed.
+const OVERALL: Record<Overall, { dot: string; tone: CheckState }> = {
+  waiting: { dot: "○", tone: "queue" },
+  running: { dot: "●", tone: "run" },
+  done: { dot: "●", tone: "pass" },
+  failed: { dot: "●", tone: "fail" },
+}
+
+function overall(watch: Watch): Overall {
+  const value = counts(watch)
+  if (value.failed > 0) return "failed"
+  if (value.running > 0) return "running"
+  if (value.queued > 0) return "waiting"
+  return "done"
 }
 
 function counts(watch: Watch) {
@@ -140,58 +155,26 @@ function pad(value: string, width: number): string {
   return value.length >= width ? value : `${value}${" ".repeat(width - value.length)}`
 }
 
-function StatusCounts(props: { watch: Watch }) {
+function WatchLine(props: { watch: Watch }) {
   const context = usePlugin()
-  const cells = createMemo(() => {
-    const value = counts(props.watch)
-    return [
-      { show: true, dot: STATE.pass.dot, text: `${value.passed}/${value.total}`, color: tone(context, "pass") },
-      { show: value.failed > 0, dot: STATE.fail.dot, text: String(value.failed), color: tone(context, "fail") },
-      { show: value.running > 0, dot: STATE.run.dot, text: String(value.running), color: tone(context, "run") },
-      { show: value.queued > 0, dot: STATE.queue.dot, text: String(value.queued), color: tone(context, "queue") },
-      { show: value.skipped > 0, dot: STATE.skip.dot, text: String(value.skipped), color: tone(context, "skip") },
-      { show: value.other > 0, dot: STATE.neutral.dot, text: String(value.other), color: tone(context, "neutral") },
-    ]
-  })
-  return (
-    <box flexDirection="row" gap={1} flexShrink={0}>
-      {cells()
-        .filter((cell) => cell.show)
-        .map((cell) => (
-          <text wrapMode="none">
-            <span style={{ fg: cell.color }}>{cell.dot}</span>
-            <span style={{ fg: context.theme.text.muted }}> {cell.text}</span>
-          </text>
-        ))}
-    </box>
-  )
-}
-
-function WatchLine(props: { watch: Watch; showRun?: boolean }) {
-  const context = usePlugin()
+  const state = overall(props.watch)
   return (
     <box flexDirection="row" gap={1} minWidth={0}>
+      <text fg={tone(context, OVERALL[state].tone)}>{OVERALL[state].dot}</text>
       <text fg={context.theme.text.base} wrapMode="none" truncate flexShrink={1} minWidth={0}>
         <b>{props.watch.branch}</b>
       </text>
-      <StatusCounts watch={props.watch} />
-      {props.showRun ? (
-        <text fg={context.theme.text.faint} wrapMode="none" flexShrink={0}>
-          run {props.watch.run}
-        </text>
-      ) : null}
     </box>
   )
 }
 
-function CheckLine(props: { check: Check; indent?: number; detail?: boolean }) {
+function CheckLine(props: { check: Check }) {
   const context = usePlugin()
   return (
-    <box flexDirection="row" paddingLeft={props.indent ?? 0} minWidth={0}>
+    <box flexDirection="row" minWidth={0}>
       <text fg={tone(context, props.check.state)}>{STATE[props.check.state].dot} </text>
-      <text fg={context.theme.text.base}>{pad(props.check.name, props.detail ? 16 : 12)}</text>
-      <text fg={tone(context, props.check.state)}>{pad(STATE[props.check.state].label, props.detail ? 10 : 8)}</text>
-      {props.detail ? <text fg={context.theme.text.faint}>{props.check.duration ?? ""}</text> : null}
+      <text fg={context.theme.text.muted}>{pad(props.check.name, 16)}</text>
+      <text fg={tone(context, props.check.state)}>{STATE[props.check.state].label}</text>
     </box>
   )
 }
@@ -200,7 +183,7 @@ function Sidebar() {
   const context = usePlugin()
   const [view, updateView] = context.storage.store("view", { initial: { open: true } })
   const watches = demo
-  const failed = createMemo(() => watches().filter((watch) => overall(watch) === "fail").length)
+  const failed = createMemo(() => watches().filter((watch) => overall(watch) === "failed").length)
 
   return (
     <box flexDirection="column">
@@ -228,7 +211,7 @@ function Sidebar() {
             <box flexDirection="column">
               <WatchLine watch={watch} />
               {watch.checks.map((check) => (
-                <CheckLine check={check} indent={2} />
+                <CheckLine check={check} />
               ))}
             </box>
           ))
