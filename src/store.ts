@@ -1,4 +1,4 @@
-import type { RunInfo, Target } from "./types.js"
+import type { RunInfo, Target } from "./types.ts"
 
 export type Include = "runs" | "pushes"
 export type NotifyMode = "failures" | "all" | "none"

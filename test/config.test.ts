@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
-import { ConfigError, loadConfig } from "../src/config.js"
+import { ConfigError, loadConfig } from "../src/config.ts"
 
 async function project(config?: unknown): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "ci-watch-config-"))

@@ -15,7 +15,8 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test test/*.test.ts"
+    "test": "node --test test/*.test.ts",
+    "test:watch": "node --test --watch test/*.test.ts"
   },
   "keywords": [
     "opencode",
@@ -29,7 +30,6 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
-    "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   }
 }

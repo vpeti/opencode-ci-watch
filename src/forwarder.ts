@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process"
-import { redact } from "./log.js"
-import type { Logger } from "./types.js"
+import { redact } from "./log.ts"
+import type { Logger } from "./types.ts"
 
 export type ForwarderState = "stopped" | "starting" | "running" | "restarting" | "forbidden" | "error"
 

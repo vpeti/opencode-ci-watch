@@ -1,5 +1,5 @@
-import type { Logger } from "../types.js"
-import type { Gh } from "./gh.js"
+import type { Logger } from "../types.ts"
+import type { Gh } from "./gh.ts"
 
 interface HookPayload {
   id?: number

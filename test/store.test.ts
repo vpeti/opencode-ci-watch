@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { RunCache, SubscriptionStore, type StorageLike } from "../src/store.js"
-import { run } from "./helpers.js"
+import { RunCache, SubscriptionStore, type StorageLike } from "../src/store.ts"
+import { run } from "./helpers.ts"
 
 function memoryStorage(): StorageLike & { data: Map<string, unknown> } {
   const data = new Map<string, unknown>()

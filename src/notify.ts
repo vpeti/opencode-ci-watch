@@ -1,6 +1,6 @@
-import type { DeliveryMode } from "./config.js"
-import { errorMessage } from "./log.js"
-import type { Logger } from "./types.js"
+import type { DeliveryMode } from "./config.ts"
+import { errorMessage } from "./log.ts"
+import type { Logger } from "./types.ts"
 
 export interface SessionApiLike {
   synthetic(input: {

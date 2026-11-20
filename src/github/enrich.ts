@@ -1,7 +1,7 @@
-import { toRunInfo } from "../events.js"
-import { trimLog, type TrimmedLog } from "../render.js"
-import type { JobInfo, RepoRef, RunInfo } from "../types.js"
-import { Gh } from "./gh.js"
+import { toRunInfo } from "../events.ts"
+import { trimLog, type TrimmedLog } from "../render.ts"
+import type { JobInfo, RepoRef, RunInfo } from "../types.ts"
+import { Gh } from "./gh.ts"
 
 const JOB_FIELDS = `{id: .id, name: .name, status: .status, conclusion: .conclusion, url: .html_url, steps: [.steps[]? | {name: .name, conclusion: .conclusion}]}`
 

@@ -4,13 +4,13 @@
  *  - subscribes a fake session to a branch
  *  - prints pushes and workflow results as they arrive
  *
- * Run: node --import tsx scripts/e2e.ts [repo] [account] [branch] [seconds] [failures|all]
+ * Run: node scripts/e2e.ts [repo] [account] [branch] [seconds] [failures|all]
  * Push to the branch while it is running.
  */
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
-import plugin from "../src/index.js"
-import { createFakeContext } from "./fake-context.js"
+import plugin from "../src/index.ts"
+import { createFakeContext } from "./fake-context.ts"
 
 const repo = process.argv[2] ?? "OWNER/opencode-ci-watch"
 const account = process.argv[3]

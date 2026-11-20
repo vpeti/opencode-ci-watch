@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
-import type { Logger } from "./types.js"
+import type { Logger } from "./types.ts"
 
 const MAX_BODY = 1024 * 1024
 const DEDUPE_TTL_MS = 10 * 60 * 1000

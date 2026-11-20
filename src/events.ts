@@ -1,4 +1,4 @@
-import type { Delivery, PushInfo, RepoRef, RunInfo } from "./types.js"
+import type { Delivery, PushInfo, RepoRef, RunInfo } from "./types.ts"
 
 function rec(value: unknown): Record<string, unknown> | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined

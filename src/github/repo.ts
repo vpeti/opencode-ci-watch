@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
-import { errorMessage } from "../log.js"
-import type { RepoRef } from "../types.js"
+import { errorMessage } from "../log.ts"
+import type { RepoRef } from "../types.ts"
 
 const run = promisify(execFile)
 

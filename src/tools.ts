@@ -1,7 +1,7 @@
 import type { Plugin } from "@opencode/plugin"
-import { CiError, type CiService, type LogInput, type StatusInput, type WaitInput, type WatchInput } from "./service.js"
-import { errorMessage } from "./log.js"
-import type { DeliveryMode } from "./store.js"
+import { CiError, type CiService, type LogInput, type StatusInput, type WaitInput, type WatchInput } from "./service.ts"
+import { errorMessage } from "./log.ts"
+import type { DeliveryMode } from "./store.ts"
 
 export interface ToolHandle {
   service?: CiService

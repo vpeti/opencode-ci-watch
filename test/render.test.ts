@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { formatDuration, renderFailure, renderPush, renderRunLine, renderSuccess, trimLog } from "../src/render.js"
-import { job, run } from "./helpers.js"
+import { formatDuration, renderFailure, renderPush, renderRunLine, renderSuccess, trimLog } from "../src/render.ts"
+import { job, run } from "./helpers.ts"
 
 test("formats durations", () => {
   assert.equal(formatDuration(9_000), "9s")

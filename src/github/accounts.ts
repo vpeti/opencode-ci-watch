@@ -1,5 +1,5 @@
-import { errorMessage } from "../log.js"
-import { Gh } from "./gh.js"
+import { errorMessage } from "../log.ts"
+import { Gh } from "./gh.ts"
 
 export type AccountResult =
   | { ok: true; account?: string }

@@ -1,14 +1,14 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import type { Config } from "../src/config.js"
-import type { Enricher } from "../src/github/enrich.js"
-import type { Notifier } from "../src/notify.js"
-import type { Forwarder } from "../src/forwarder.js"
-import { CiService } from "../src/service.js"
-import { RunCache, SubscriptionStore, type StorageLike } from "../src/store.js"
-import type { Logger } from "../src/types.js"
-import { job, pushPayload, run, workflowRunPayload } from "./helpers.js"
-import { normalizeDelivery } from "../src/events.js"
+import type { Config } from "../src/config.ts"
+import type { Enricher } from "../src/github/enrich.ts"
+import type { Notifier } from "../src/notify.ts"
+import type { Forwarder } from "../src/forwarder.ts"
+import { CiService } from "../src/service.ts"
+import { RunCache, SubscriptionStore, type StorageLike } from "../src/store.ts"
+import type { Logger } from "../src/types.ts"
+import { job, pushPayload, run, workflowRunPayload } from "./helpers.ts"
+import { normalizeDelivery } from "../src/events.ts"
 
 const silent: Logger = { info() {}, warn() {}, error() {} }
 

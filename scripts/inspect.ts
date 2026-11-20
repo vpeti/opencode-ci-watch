@@ -1,10 +1,10 @@
 /**
  * Prints `ci_status` for a branch, commit or run against the real GitHub API.
- * Run: node --import tsx scripts/inspect.ts [repo] [account] [branch]
+ * Run: node scripts/inspect.ts [repo] [account] [branch]
  */
 import { join } from "node:path"
-import plugin from "../src/index.js"
-import { createFakeContext } from "./fake-context.js"
+import plugin from "../src/index.ts"
+import { createFakeContext } from "./fake-context.ts"
 
 const repo = process.argv[2] ?? "OWNER/opencode-ci-watch"
 const account = process.argv[3]

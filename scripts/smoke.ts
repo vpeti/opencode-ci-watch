@@ -1,10 +1,10 @@
 /**
  * Loads the plugin against a fake OpenCode context to check wiring without a full server.
- * Run with: node --import tsx scripts/smoke.ts [repo] [account]
+ * Run with: node scripts/smoke.ts [repo] [account]
  */
 import { join } from "node:path"
-import plugin from "../src/index.js"
-import { createFakeContext } from "./fake-context.js"
+import plugin from "../src/index.ts"
+import { createFakeContext } from "./fake-context.ts"
 
 const repo = process.argv[2] ?? "OWNER/opencode-ci-watch"
 const account = process.argv[3]

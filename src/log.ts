@@ -1,4 +1,4 @@
-import type { Logger } from "./types.js"
+import type { Logger } from "./types.ts"
 
 const secret = /(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g
 

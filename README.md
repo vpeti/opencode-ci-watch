@@ -116,4 +116,8 @@ npm run typecheck
 npm test
 ```
 
+Tests execute the `.ts` sources directly through Node's type stripping, so development needs
+**Node 24+**; the plugin itself only needs Node 20 when OpenCode loads it. There is no bundler or
+test transpiler in the dependency tree.
+
 `PLAN.md` is intentionally not tracked; it is a local design document.

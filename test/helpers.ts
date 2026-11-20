@@ -1,4 +1,4 @@
-import type { JobInfo, RunInfo } from "../src/types.js"
+import type { JobInfo, RunInfo } from "../src/types.ts"
 
 export function run(overrides: Partial<RunInfo> = {}): RunInfo {
   return {

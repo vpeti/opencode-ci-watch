@@ -1,4 +1,4 @@
-import type { JobInfo, PushInfo, RunInfo } from "./types.js"
+import type { JobInfo, PushInfo, RunInfo } from "./types.ts"
 
 const ANSI = /\u001B\[[0-9;]*[A-Za-z]/g
 // GitHub's log API returns some colour codes as literal caret notation.

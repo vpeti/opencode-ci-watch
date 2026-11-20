@@ -1,8 +1,8 @@
 import assert from "node:assert/strict"
 import { createHmac } from "node:crypto"
 import test from "node:test"
-import { startWebhookServer, verifySignature } from "../src/http.js"
-import type { Logger } from "../src/types.js"
+import { startWebhookServer, verifySignature } from "../src/http.ts"
+import type { Logger } from "../src/types.ts"
 
 const silent: Logger = { info() {}, warn() {}, error() {} }
 

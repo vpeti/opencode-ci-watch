@@ -1,5 +1,5 @@
-import type { Subscription } from "./store.js"
-import type { PushInfo, RunInfo, Target } from "./types.js"
+import type { Subscription } from "./store.ts"
+import type { PushInfo, RunInfo, Target } from "./types.ts"
 
 export function targetKey(target: Target): string {
   return `${target.type}:${target.value.toLowerCase()}`

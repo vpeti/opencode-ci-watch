@@ -1,8 +1,8 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { matchesPush, matchesRun, targetKey, targetMatchesDelivery } from "../src/match.js"
-import type { Subscription } from "../src/store.js"
-import { run } from "./helpers.js"
+import { matchesPush, matchesRun, targetKey, targetMatchesDelivery } from "../src/match.ts"
+import type { Subscription } from "../src/store.ts"
+import { run } from "./helpers.ts"
 
 function subscription(overrides: Partial<Subscription> = {}): Subscription {
   return {

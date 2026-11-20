@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto"
-import type { Config } from "./config.js"
-import { isFailure, isTerminal, isSuccess } from "./events.js"
-import type { Enricher } from "./github/enrich.js"
-import type { Forwarder } from "./forwarder.js"
-import { errorMessage } from "./log.js"
-import { describeTarget, matchesPush, matchesRun, targetKey, targetMatchesDelivery } from "./match.js"
-import type { Notifier } from "./notify.js"
+import type { Config } from "./config.ts"
+import { isFailure, isTerminal, isSuccess } from "./events.ts"
+import type { Enricher } from "./github/enrich.ts"
+import type { Forwarder } from "./forwarder.ts"
+import { errorMessage } from "./log.ts"
+import { describeTarget, matchesPush, matchesRun, targetKey, targetMatchesDelivery } from "./match.ts"
+import type { Notifier } from "./notify.ts"
 import {
   conclusionEmoji,
   relativeTime,
@@ -14,9 +14,9 @@ import {
   renderPush,
   renderRunLine,
   renderSuccess,
-} from "./render.js"
-import type { DeliveryMode, Include, NotifyMode, RunCache, Subscription, SubscriptionStore } from "./store.js"
-import type { Delivery, JobInfo, Logger, PushInfo, RepoRef, RunInfo, Target } from "./types.js"
+} from "./render.ts"
+import type { DeliveryMode, Include, NotifyMode, RunCache, Subscription, SubscriptionStore } from "./store.ts"
+import type { Delivery, JobInfo, Logger, PushInfo, RepoRef, RunInfo, Target } from "./types.ts"
 
 export class CiError extends Error {
   override name = "CiError"

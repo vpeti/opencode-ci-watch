@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { isFailure, isSuccess, isTerminal, normalizeDelivery } from "../src/events.js"
-import { pushPayload, workflowRunPayload } from "./helpers.js"
+import { isFailure, isSuccess, isTerminal, normalizeDelivery } from "../src/events.ts"
+import { pushPayload, workflowRunPayload } from "./helpers.ts"
 
 test("normalizes a workflow_run event", () => {
   const delivery = normalizeDelivery("workflow_run", workflowRunPayload())
