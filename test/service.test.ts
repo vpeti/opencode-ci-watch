@@ -436,3 +436,10 @@ test("the dashboard state omits null timestamps", async () => {
   assert.equal(state.watches[0]?.jobs[0]?.startedAt, undefined)
   assert.equal(state.watches[0]?.jobs[0]?.completedAt, undefined)
 })
+
+test("a sha without runs yet says so", async () => {
+  const h = harness()
+  const result = await h.service.status({ sha: "abc1234" })
+  assert.match(result.content, /no workflow runs yet/)
+  assert.match(result.content, /GitHub may still be creating one/)
+})

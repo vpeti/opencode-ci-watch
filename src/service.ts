@@ -561,7 +561,9 @@ export class CiService {
     const withJobs = input.include?.includes("jobs") === true
     const withLogs = input.include?.includes("logs") === true
     if (runs.length === 0) {
-      return { content: `no workflow runs found for ${describeTarget(target)}`, metadata: { target, runs: [] } }
+      // A push notification arrives before GitHub creates the run, so "yet" matters.
+      const hint = target.type === "sha" ? " · GitHub may still be creating one" : ""
+      return { content: `no workflow runs yet for ${describeTarget(target)}${hint}`, metadata: { target, runs: [] } }
     }
 
     const lines: string[] = []
