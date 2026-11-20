@@ -126,3 +126,13 @@ export async function currentGitBranch(directory: string): Promise<string | unde
     return undefined
   }
 }
+
+export async function sameRepo(left: string, right: string): Promise<boolean> {
+  try {
+    const a = await git(["rev-parse", "--show-toplevel"], left)
+    const b = await git(["rev-parse", "--show-toplevel"], right)
+    return a === b
+  } catch {
+    return false
+  }
+}

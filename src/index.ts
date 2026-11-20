@@ -8,12 +8,13 @@ import { listAccounts, resolveAccount } from "./github/accounts.ts"
 import { Enricher } from "./github/enrich.ts"
 import { Gh } from "./github/gh.ts"
 import { DevHookTracker } from "./github/hooks.ts"
-import { currentGitBranch, resolveRepo } from "./github/repo.ts"
+import { currentGitBranch, resolveRepo, sameRepo } from "./github/repo.ts"
 import { startWebhookServer } from "./http.ts"
 import { errorMessage, logger } from "./log.ts"
 import { Notifier, type SessionApiLike } from "./notify.ts"
 import { CiService } from "./service.ts"
 import { SKILL_CONTENT, SKILL_DESCRIPTION, SKILL_ID, SKILL_NAME, SKILL_PATH } from "./skill.ts"
+import { pushDirectory } from "./shell.ts"
 import { RunCache, SubscriptionStore, type StorageLike } from "./store.ts"
 import { registerTools } from "./tools.ts"
 
@@ -175,14 +176,18 @@ export default Plugin.define({
     })()
 
     if (config.autoSubscribe.onPush) {
-      await ctx.tool.hook("execute.after", (event) => {
+      await ctx.tool.hook("execute.after", async (event) => {
         if (event.tool !== "shell" || event.status !== "completed") return
         const rule = ruleFor(config.agents, event.agent)
         if (rule?.tools && rule.tools !== "all") return
-        const command = (event.input as { command?: unknown } | undefined)?.command
+        const input = event.input as { command?: unknown; workdir?: unknown } | undefined
+        const command = input?.command
         if (typeof command !== "string") return
-        if (!/\bgit\s+push\b/.test(command)) return
         if (/--dry-run|(?:^|\s)-n(?:\s|$)/.test(command)) return
+        const workdir = typeof input?.workdir === "string" ? input.workdir : directory
+        const target = pushDirectory(command, workdir)
+        if (!target) return
+        if (!(await sameRepo(directory, target))) return
         void service.autoSubscribe(event.sessionID).catch((error) => {
           logger.warn("auto-subscribe failed", { error: errorMessage(error) })
         })
