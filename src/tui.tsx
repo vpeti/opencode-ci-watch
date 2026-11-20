@@ -1,3 +1,4 @@
+import { createSignal } from "solid-js"
 import { Plugin, usePlugin } from "@opencode/plugin/tui"
 
 // PROTOTYPE: mocked watcher state. Replace with an RPC call to the server part once
@@ -16,7 +17,7 @@ interface Watch {
   checks: Check[]
 }
 
-const WATCHES: Watch[] = [
+const BASE: Watch[] = [
   {
     branch: "main",
     run: 44706868699,
@@ -54,13 +55,59 @@ const STATE: Record<CheckState, { dot: string; label: string; tone: "success" | 
 }
 
 function tone(context: ReturnType<typeof usePlugin>, state: CheckState) {
-  const kind = STATE[state].tone
-  if (kind === "success") return context.theme.text.feedback.success.base
-  if (kind === "error") return context.theme.text.feedback.error.base
-  if (kind === "warning") return context.theme.text.feedback.warning.base
-  if (kind === "faint") return context.theme.text.faint
+  const feedback = context.theme.text.feedback
+  if (state === "run") return pulse() ? feedback.warning.base : feedback.warning.muted
+  if (state === "pass") return feedback.success.base
+  if (state === "fail") return feedback.error.base
+  if (state === "queue") return feedback.warning.base
+  if (state === "skip") return context.theme.text.faint
   return context.theme.text.muted
 }
+
+// Demo clock: one state transition every 700ms, then a short hold and a reset.
+const initial = (): Watch[] =>
+  BASE.map((watch, index) => ({
+    ...watch,
+    checks: watch.checks.map((check) =>
+      index === 0
+        ? { ...check, state: check.state === "skip" ? "skip" : "queue", duration: undefined }
+        : { ...check },
+    ),
+  }))
+
+const [demo, setDemo] = createSignal<Watch[]>(initial())
+const [pulse, setPulse] = createSignal(0)
+
+function transition(watches: Watch[], name: string, state: CheckState, duration?: string): Watch[] {
+  return watches.map((watch, index) =>
+    index !== 0
+      ? watch
+      : {
+          ...watch,
+          checks: watch.checks.map((check) => (check.name === name ? { ...check, state, duration } : check)),
+        },
+  )
+}
+
+const STEP = (name: string, state: CheckState, duration?: string) => () =>
+  setDemo((watches) => transition(watches, name, state, duration))
+
+const STEPS = [
+  STEP("fmt", "run"),
+  STEP("fmt", "pass", "11s"),
+  STEP("deny", "run"),
+  STEP("deny", "pass", "48s"),
+  STEP("model", "run"),
+  STEP("model", "pass", "10s"),
+  STEP("provenance", "run"),
+  STEP("provenance", "pass", "8s"),
+  STEP("clippy", "run"),
+  STEP("clippy", "fail", "21s"),
+  STEP("test", "run"),
+  STEP("test", "pass", "2m17s"),
+  STEP("aarch64", "run"),
+  STEP("aarch64", "pass", "1m04s"),
+]
 
 function overall(watch: Watch): CheckState {
   if (watch.checks.some((check) => check.state === "fail")) return "fail"
@@ -157,7 +204,8 @@ function CheckLine(props: { check: Check; indent?: number; detail?: boolean }) {
 function Sidebar() {
   const context = usePlugin()
   const [view, updateView] = context.storage.store("view", { initial: { open: true } })
-  const failed = WATCHES.filter((watch) => overall(watch) === "fail").length
+  const watches = demo()
+  const failed = watches.filter((watch) => overall(watch) === "fail").length
 
   return (
     <box flexDirection="column">
@@ -176,12 +224,12 @@ function Sidebar() {
         </text>
         {view.open ? null : (
           <text fg={context.theme.text.muted}>
-            ({WATCHES.length} watched{failed > 0 ? `, ${failed} failed` : ""})
+            ({watches.length} watched{failed > 0 ? `, ${failed} failed` : ""})
           </text>
         )}
       </box>
       {view.open
-        ? WATCHES.map((watch) => {
+        ? watches.map((watch) => {
             const attention = watch.checks.filter((check) => check.state === "fail" || check.state === "run")
             // Few checks: list them all. Many: only the ones that need attention.
             const listed = watch.checks.length <= 5 ? watch.checks : attention
@@ -204,6 +252,7 @@ function Sidebar() {
 
 function Panel() {
   const context = usePlugin()
+  const watches = demo()
   return (
     <box flexDirection="column" padding={1}>
       <box flexDirection="row" gap={1}>
@@ -212,7 +261,7 @@ function Panel() {
         </text>
         <text fg={context.theme.text.muted}>watched checks</text>
       </box>
-      {WATCHES.map((watch) => (
+      {watches.map((watch) => (
         <box flexDirection="column" marginTop={1}>
           <WatchLine watch={watch} showRun />
           {watch.checks.map((check) => (
@@ -228,6 +277,22 @@ function Panel() {
 export default Plugin.define({
   id: "ci",
   setup(context) {
+    const stopTicks = context.renderer.onAnimationTick(4, (_delta, ticks) => setPulse(ticks % 2))
+    let cursor = 0
+    let hold = 0
+    const timer = setInterval(() => {
+      if (cursor < STEPS.length) {
+        STEPS[cursor]!()
+        cursor += 1
+        return
+      }
+      hold += 1
+      if (hold > 4) {
+        hold = 0
+        cursor = 0
+        setDemo(initial())
+      }
+    }, 700)
     context.ui.slot({
       append: "sidebar.content",
       render: () => <Sidebar />,
@@ -252,5 +317,9 @@ export default Plugin.define({
         },
       ],
     }))
+    return () => {
+      stopTicks()
+      clearInterval(timer)
+    }
   },
 })
