@@ -160,7 +160,8 @@ function Sidebar(props: { sessionID: string }) {
 
   const refresh = async (sessionID: string) => {
     try {
-      const next = (await context.client.rpc(CiRpc).state({ sessionID })) as CiState
+      const location = context.location ?? context.data.location.default()
+      const next = (await context.client.rpc(CiRpc).state({ sessionID }, { location })) as CiState
       if (sessionID === props.sessionID) {
         setState(next)
         setLoaded(true)
