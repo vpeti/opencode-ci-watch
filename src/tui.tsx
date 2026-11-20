@@ -2,7 +2,7 @@ import { Plugin, usePlugin } from "@opencode/plugin/tui"
 
 // PROTOTYPE: mocked watcher state. Replace with an RPC call to the server part once
 // the look is settled. Nothing here talks to GitHub.
-type CheckState = "pass" | "fail" | "run" | "queue" | "skip"
+type CheckState = "pass" | "fail" | "run" | "queue" | "skip" | "cancel" | "neutral"
 
 interface Check {
   name: string
@@ -41,29 +41,25 @@ const WATCHES: Watch[] = [
   },
 ]
 
-const DOT: Record<CheckState, string> = {
-  pass: "●",
-  fail: "●",
-  run: "●",
-  queue: "○",
-  skip: "○",
-}
-
-const LABEL: Record<CheckState, string> = {
-  pass: "passed",
-  fail: "failed",
-  run: "running",
-  queue: "queued",
-  skip: "skipped",
+// One state table drives the summary glyphs, the list rows and the panel, so a new
+// conclusion only has to be added here. Glyphs follow the GitHub checks UI.
+const STATE: Record<CheckState, { dot: string; label: string; tone: "success" | "error" | "warning" | "muted" | "faint" }> = {
+  pass: { dot: "●", label: "passed", tone: "success" },
+  fail: { dot: "●", label: "failed", tone: "error" },
+  run: { dot: "●", label: "running", tone: "warning" },
+  queue: { dot: "○", label: "queued", tone: "warning" },
+  skip: { dot: "○", label: "skipped", tone: "faint" },
+  cancel: { dot: "●", label: "cancelled", tone: "muted" },
+  neutral: { dot: "●", label: "neutral", tone: "muted" },
 }
 
 function tone(context: ReturnType<typeof usePlugin>, state: CheckState) {
-  const feedback = context.theme.text.feedback
-  if (state === "pass") return feedback.success.base
-  if (state === "fail") return feedback.error.base
-  if (state === "run") return feedback.warning.base
-  if (state === "queue") return feedback.info.base
-  return context.theme.text.faint
+  const kind = STATE[state].tone
+  if (kind === "success") return context.theme.text.feedback.success.base
+  if (kind === "error") return context.theme.text.feedback.error.base
+  if (kind === "warning") return context.theme.text.feedback.warning.base
+  if (kind === "faint") return context.theme.text.faint
+  return context.theme.text.muted
 }
 
 function overall(watch: Watch): CheckState {
@@ -73,38 +69,66 @@ function overall(watch: Watch): CheckState {
 }
 
 function counts(watch: Watch) {
-  return {
+  const value = {
     total: watch.checks.length,
-    passed: watch.checks.filter((check) => check.state === "pass").length,
-    failed: watch.checks.filter((check) => check.state === "fail").length,
-    running: watch.checks.filter((check) => check.state === "run" || check.state === "queue").length,
+    passed: 0,
+    failed: 0,
+    running: 0,
+    queued: 0,
+    skipped: 0,
+    other: 0,
   }
-}
-
-function summary(watch: Watch): string {
-  const value = counts(watch)
-  const parts = [`${value.passed}/${value.total} passed`]
-  if (value.failed > 0) parts.push(`${value.failed} failed`)
-  if (value.running > 0) parts.push(`${value.running} running`)
-  return parts.join(" · ")
+  for (const check of watch.checks) {
+    if (check.state === "pass") value.passed += 1
+    else if (check.state === "fail") value.failed += 1
+    else if (check.state === "run") value.running += 1
+    else if (check.state === "queue") value.queued += 1
+    else if (check.state === "skip") value.skipped += 1
+    else value.other += 1
+  }
+  return value
 }
 
 function pad(value: string, width: number): string {
   return value.length >= width ? value : `${value}${" ".repeat(width - value.length)}`
 }
 
+function StatusCounts(props: { watch: Watch }) {
+  const context = usePlugin()
+  const value = counts(props.watch)
+  const cells = [
+    { show: true, dot: STATE.pass.dot, text: `${value.passed}/${value.total}`, color: tone(context, "pass") },
+    { show: value.failed > 0, dot: STATE.fail.dot, text: String(value.failed), color: tone(context, "fail") },
+    { show: value.running > 0, dot: STATE.run.dot, text: String(value.running), color: tone(context, "run") },
+    { show: value.queued > 0, dot: STATE.queue.dot, text: String(value.queued), color: tone(context, "queue") },
+    { show: value.skipped > 0, dot: STATE.skip.dot, text: String(value.skipped), color: tone(context, "skip") },
+    { show: value.other > 0, dot: STATE.neutral.dot, text: String(value.other), color: tone(context, "neutral") },
+  ]
+  return (
+    <box flexDirection="row" gap={1} flexShrink={0}>
+      {cells
+        .filter((cell) => cell.show)
+        .map((cell) => (
+          <text wrapMode="none">
+            <span style={{ fg: cell.color }}>{cell.dot}</span>
+            <span style={{ fg: context.theme.text.muted }}> {cell.text}</span>
+          </text>
+        ))}
+    </box>
+  )
+}
+
 function WatchLine(props: { watch: Watch; showRun?: boolean }) {
   const context = usePlugin()
   return (
-    <box flexDirection="row" gap={1}>
-      <text fg={tone(context, overall(props.watch))}>{DOT[overall(props.watch)]}</text>
-      <text fg={context.theme.text.base}>
+    <box flexDirection="row" gap={1} minWidth={0}>
+      <text fg={context.theme.text.base} wrapMode="none" truncate flexShrink={1} minWidth={0}>
         <b>{props.watch.branch}</b>
       </text>
-      <text fg={context.theme.text.muted}>{summary(props.watch)}</text>
+      <StatusCounts watch={props.watch} />
       {props.showRun ? (
-        <text fg={context.theme.text.faint}>
-          · run {props.watch.run}
+        <text fg={context.theme.text.faint} wrapMode="none" flexShrink={0}>
+          run {props.watch.run}
         </text>
       ) : null}
     </box>
@@ -122,9 +146,9 @@ function CheckLine(props: { check: Check; indent?: number; detail?: boolean }) {
         context.ui.panel.open("ci")
       }}
     >
-      <text fg={tone(context, props.check.state)}>{DOT[props.check.state]} </text>
+      <text fg={tone(context, props.check.state)}>{STATE[props.check.state].dot} </text>
       <text fg={context.theme.text.base}>{pad(props.check.name, props.detail ? 16 : 12)}</text>
-      <text fg={tone(context, props.check.state)}>{pad(LABEL[props.check.state], 8)}</text>
+      <text fg={tone(context, props.check.state)}>{pad(STATE[props.check.state].label, props.detail ? 10 : 8)}</text>
       {props.detail ? <text fg={context.theme.text.faint}>{props.check.duration ?? ""}</text> : null}
     </box>
   )
