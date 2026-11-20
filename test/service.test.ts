@@ -325,3 +325,13 @@ test("a pushes-only watch still receives the branch run state", async () => {
   assert.equal(state.watches[0]?.run?.id, 1001)
   assert.equal(state.watches[0]?.run?.status, "in_progress")
 })
+
+test("unwatch notifies state observers", async () => {
+  const h = harness()
+  await h.service.watch("ses_1", { branch: "main" })
+  h.changes.length = 0
+
+  await h.service.unwatch("ses_1", { branch: "main" })
+  assert.ok(h.changes.includes("ses_1"))
+  assert.equal((await h.service.state("ses_1")).watches.length, 0)
+})
