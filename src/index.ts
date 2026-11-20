@@ -41,9 +41,7 @@ export default Plugin.define({
     try {
       config = await loadConfig({ directory, options: ctx.options })
     } catch (error) {
-      logger.error("invalid configuration", { error: errorMessage(error) })
-      await registerTools(ctx, { unavailable: errorMessage(error) })
-      await registerSkill(ctx)
+      logger.error("invalid configuration; ci tools stay disabled", { error: errorMessage(error) })
       return
     }
 
@@ -54,9 +52,7 @@ export default Plugin.define({
 
     const resolved = await resolveRepo({ directory, explicit: config.repo, host: config.host })
     if (!resolved.ok) {
-      logger.warn(resolved.message)
-      await registerTools(ctx, { unavailable: resolved.message })
-      await registerSkill(ctx)
+      logger.info(`${resolved.message}; ci tools stay disabled`)
       return
     }
     const repo = resolved.repo
@@ -70,9 +66,7 @@ export default Plugin.define({
         const message = `configured gh account "${config.account}" is not logged in${
           accounts.length > 0 ? ` (available: ${accounts.join(", ")})` : ""
         }`
-        logger.error(message)
-        await registerTools(ctx, { unavailable: message })
-        await registerSkill(ctx)
+        logger.error(`${message}; ci tools stay disabled`)
         return
       }
     } else {
@@ -91,9 +85,7 @@ export default Plugin.define({
         token = await gh.token()
       } catch (error) {
         const message = errorMessage(error)
-        logger.error(message)
-        await registerTools(ctx, { unavailable: message })
-        await registerSkill(ctx)
+        logger.error(`${message}; ci tools stay disabled`)
         return
       }
     }
@@ -121,10 +113,7 @@ export default Plugin.define({
         },
       })
     } catch (error) {
-      const message = `cannot start the local webhook server: ${errorMessage(error)}`
-      logger.error(message)
-      await registerTools(ctx, { unavailable: message })
-      await registerSkill(ctx)
+      logger.error(`cannot start the local webhook server: ${errorMessage(error)}; ci tools stay disabled`)
       return
     }
 
@@ -161,7 +150,7 @@ export default Plugin.define({
       logger.error("cannot restore subscriptions", { error: errorMessage(error) })
     }
 
-    await registerTools(ctx, { service })
+    await registerTools(ctx, service)
     await registerSkill(ctx)
     try {
       await applyAgentTransforms(ctx, config)

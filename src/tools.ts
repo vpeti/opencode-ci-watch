@@ -3,11 +3,6 @@ import { CiError, type CiService, type LogInput, type StatusInput, type WaitInpu
 import { errorMessage } from "./log.ts"
 import type { DeliveryMode } from "./store.ts"
 
-export interface ToolHandle {
-  service?: CiService
-  unavailable?: string
-}
-
 const NAMESPACE_DESCRIPTION =
   "GitHub Actions for this repository. Watch CI results for a branch, commit or run: failures are delivered " +
   "into the session with the failing job and a log excerpt, successes update a short status line. Use these " +
@@ -47,13 +42,8 @@ const targetProperties = {
 
 const TARGETS = "Pass exactly one of `branch`, `sha`, `run` or `current`; omit all to use the current branch."
 
-export async function registerTools(ctx: Plugin.Context, handle: ToolHandle): Promise<void> {
-  const guard = (): CiService => {
-    if (!handle.service) {
-      throw new CiError(handle.unavailable ?? "ci is not configured")
-    }
-    return handle.service
-  }
+export async function registerTools(ctx: Plugin.Context, service: CiService): Promise<void> {
+  const guard = (): CiService => service
 
   const run = async (body: () => Promise<{ content: string; metadata?: Record<string, unknown> }>) => {
     try {
