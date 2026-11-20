@@ -1,0 +1,26 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ok:
+    runs-on: ubuntu-latest
+    steps:
+      - name: say hello
+        run: echo "all good"
+
+  fail:
+    runs-on: ubuntu-latest
+    if: contains(github.event.head_commit.message, '[fail]')
+    steps:
+      - name: intentional failure
+        run: |
+          echo "about to fail" >&2
+          echo "error: intentional failure for opencode-ci-watch" >&2
+          exit 1
