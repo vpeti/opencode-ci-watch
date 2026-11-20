@@ -8,12 +8,21 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ok:
     runs-on: ubuntu-latest
     steps:
-      - name: say hello
-        run: echo "all good"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: checks
+        run: |
+          node --version
+          npm ci
+          npm run typecheck
+          npm test
 
   fail:
     runs-on: ubuntu-latest

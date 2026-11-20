@@ -68,3 +68,17 @@ test("falls back to the tail when no error marker exists", () => {
   assert.ok(trimmed.text.length <= 200)
   assert.ok(trimmed.text.startsWith("… (truncated)"))
 })
+
+test("strips caret-escaped colour codes and runner noise", () => {
+  const raw = [
+    "test\tstep\t2026-11-20T10:00:00Z ^[[36;1mecho hi^[[0m",
+    "test\tstep\t2026-11-20T10:00:01Z shell: /usr/bin/bash -e {0}",
+    "test\tstep\t2026-11-20T10:00:02Z ##[endgroup]",
+    "test\tstep\t2026-11-20T10:00:03Z error: boom",
+  ].join("\n")
+  const trimmed = trimLog(raw, 500)
+  assert.ok(!trimmed.text.includes("^[["))
+  assert.ok(!trimmed.text.includes("shell:"))
+  assert.ok(!trimmed.text.includes("endgroup"))
+  assert.ok(trimmed.text.includes("error: boom"))
+})

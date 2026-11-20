@@ -1,6 +1,8 @@
 import type { JobInfo, PushInfo, RunInfo } from "./types.js"
 
 const ANSI = /\u001B\[[0-9;]*[A-Za-z]/g
+// GitHub's log API returns some colour codes as literal caret notation.
+const ANSI_CARET = /\^\[\[[0-9;]*[A-Za-z]/g
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+/
 
 const EMOJI: Record<string, string> = {
@@ -127,8 +129,10 @@ export function renderJobs(jobs: readonly JobInfo[]): string[] {
 }
 
 function cleanLine(line: string): string {
-  return line.replace(ANSI, "").replace(/\r$/, "")
+  return line.replace(ANSI, "").replace(ANSI_CARET, "").replace(/\r$/, "")
 }
+
+const NOISE = /^(##\[(endgroup|group)\]|shell:\s)/
 
 const ERROR_PATTERN = /(##\[error\]|\berror(\[|:|\s)|Error:|panic:|FAILED|assertion|fatal:)/
 
@@ -155,23 +159,24 @@ export function trimLog(raw: string, maxChars: number): TrimmedLog {
       parsed.push({ content: line.replace(TIMESTAMP, "") })
     }
   }
-  if (parsed.length === 0) return { text: "" }
+  const kept = parsed.filter((entry) => !NOISE.test(entry.content.trim()))
+  if (kept.length === 0) return { text: "" }
 
-  const errorIndex = parsed.findIndex((entry) => ERROR_PATTERN.test(entry.content))
-  const interesting = errorIndex === -1 ? undefined : parsed[errorIndex]
-  const firstTagged = parsed.find((entry) => entry.job)
+  const errorIndex = kept.findIndex((entry) => ERROR_PATTERN.test(entry.content))
+  const interesting = errorIndex === -1 ? undefined : kept[errorIndex]
+  const firstTagged = kept.find((entry) => entry.job)
 
   let text: string
   if (errorIndex === -1) {
-    text = parsed
-      .slice(Math.max(0, parsed.length - 40))
+    text = kept
+      .slice(Math.max(0, kept.length - 40))
       .map((entry) => entry.content.trimEnd())
       .join("\n")
     if (text.length > maxChars) {
       text = `… (truncated)\n${text.slice(text.length - Math.max(0, maxChars - 16))}`
     }
   } else {
-    text = parsed
+    text = kept
       .slice(Math.max(0, errorIndex - 1))
       .map((entry) => entry.content.trimEnd())
       .join("\n")
