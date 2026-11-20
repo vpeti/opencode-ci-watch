@@ -227,3 +227,46 @@ test("notify.success makes the default subscription wait for every run to be gre
   assert.equal(h.wakes.length, 1)
   assert.match(h.wakes[0]!.text, /^✅ main · 2\/2 green/)
 })
+
+test("a green run from an older commit does not wake after a newer push", async () => {
+  const h = harness({ notifySuccess: true, greenSettleMs: 0 })
+  await h.service.watch("ses_1", { branch: "main" })
+  const olderSha = "a".repeat(40)
+  const newerSha = "b".repeat(40)
+
+  const older = normalizeDelivery(
+    "workflow_run",
+    workflowRunPayload({ id: 3001, conclusion: "success", head_sha: olderSha, created_at: "2026-11-20T10:00:00Z" }),
+  )
+  const pending = normalizeDelivery(
+    "workflow_run",
+    workflowRunPayload({
+      id: 3002,
+      status: "queued",
+      conclusion: null,
+      head_sha: newerSha,
+      created_at: "2026-11-20T10:05:00Z",
+    }),
+  )
+  assert.ok(older && pending)
+  await h.service.onDelivery(older)
+  await h.service.onDelivery(pending)
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  assert.equal(h.wakes.length, 0)
+
+  const newer = normalizeDelivery(
+    "workflow_run",
+    workflowRunPayload({
+      id: 3002,
+      conclusion: "success",
+      head_sha: newerSha,
+      created_at: "2026-11-20T10:05:00Z",
+    }),
+  )
+  assert.ok(newer)
+  await h.service.onDelivery(newer)
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  assert.equal(h.wakes.length, 1)
+  assert.match(h.wakes[0]!.text, /^✅ main · 1\/1 green/)
+  assert.doesNotMatch(h.wakes[0]!.text, /⏳/)
+})

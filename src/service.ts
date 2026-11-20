@@ -198,21 +198,30 @@ export class CiService {
     return { type: "branch", value: await this.currentBranch() }
   }
 
+  private cachedRuns(target: Target, limit = 20): RunInfo[] {
+    if (target.type === "branch") return this.deps.cache.forBranch(this.slug, target.value, limit)
+    if (target.type === "sha") return this.deps.cache.forSha(this.slug, target.value, limit)
+    const run = this.deps.cache.get(this.slug, Number(target.value))
+    return run ? [run] : []
+  }
+
+  private newestRun(target: Target): RunInfo | undefined {
+    return [...this.cachedRuns(target)].sort(
+      (left, right) =>
+        (Date.parse(right.createdAt ?? "") || 0) - (Date.parse(left.createdAt ?? "") || 0) || right.id - left.id,
+    )[0]
+  }
+
   /** Aggregates every run for the newest commit of a branch/sha, so one quick workflow cannot hide a pending one. */
   private summaryFor(target: Target): string {
     if (target.type === "run") {
       const run = this.deps.cache.get(this.slug, Number(target.value))
       return run ? `${conclusionEmoji(run.conclusion)} ${run.name} ${run.conclusion ?? run.status}` : "no run yet"
     }
-    const runs =
-      target.type === "branch"
-        ? this.deps.cache.forBranch(this.slug, target.value, 20)
-        : this.deps.cache.forSha(this.slug, target.value, 20)
+    const runs = this.cachedRuns(target)
     if (runs.length === 0) return "no runs yet"
-    const newest = [...runs].sort(
-      (left, right) =>
-        (Date.parse(right.createdAt ?? "") || 0) - (Date.parse(left.createdAt ?? "") || 0) || right.id - left.id,
-    )[0]!
+    const newest = this.newestRun(target)
+    if (!newest) return "no runs yet"
     const sha = newest.sha
     const forSha = runs.filter((run) => run.sha === sha)
     const running = forSha.filter((run) => !isTerminal(run)).length
@@ -226,15 +235,13 @@ export class CiService {
     return `${parts.join(" · ")}${label}`
   }
 
-  /** True when every run known for this commit has finished without a failure. */
+  /** True when this commit is the newest one being watched and every run on it finished without a failure. */
   private settledFor(target: Target, sha: string): boolean {
-    const runs =
-      target.type === "branch"
-        ? this.deps.cache.forBranch(this.slug, target.value, 20)
-        : target.type === "sha"
-          ? this.deps.cache.forSha(this.slug, target.value, 20)
-          : [this.deps.cache.get(this.slug, Number(target.value))].filter((run): run is RunInfo => run !== undefined)
-    const forSha = runs.filter((run) => run.sha === sha)
+    if (target.type === "branch") {
+      const newest = this.newestRun(target)
+      if (newest && newest.sha !== sha) return false
+    }
+    const forSha = this.cachedRuns(target).filter((run) => run.sha === sha)
     return forSha.length > 0 && forSha.every(isTerminal) && !forSha.some(isFailure)
   }
 
@@ -244,6 +251,7 @@ export class CiService {
     const timer = setTimeout(() => {
       this.greenTimers.delete(key)
       if (!this.settledFor(subscription.target, sha)) return
+      if (!this.summaryFor(subscription.target).startsWith("✅")) return
       void this.deps.notifier.wake(
         subscription.sessionID,
         this.greenNotice(subscription.target),
