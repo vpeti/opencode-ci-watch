@@ -99,7 +99,8 @@ export class Gh {
     } catch (error) {
       if (options.signal?.aborted) throw new GhError("aborted")
       const candidate = error as { code?: number | string; stderr?: string; message?: string }
-      const detail = redact((candidate.stderr ?? candidate.message ?? errorMessage(error)).trim()).slice(0, 1200)
+      const raw = candidate.stderr?.trim() || candidate.message || errorMessage(error)
+      const detail = redact(raw.trim()).slice(0, 1200)
       const code = typeof candidate.code === "number" ? candidate.code : undefined
       throw new GhError(`\`gh ${args.join(" ")}\` failed${code === undefined ? "" : ` (${code})`}: ${detail}`, code)
     }

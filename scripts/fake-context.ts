@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs"
 import { setTimeout as sleep } from "node:timers/promises"
 
 export interface FakeTool {
@@ -25,6 +26,7 @@ export interface FakeOptions {
 }
 
 export function createFakeContext(options: FakeOptions) {
+  mkdirSync(options.directory, { recursive: true })
   const data = new Map<string, unknown>()
   const tools: FakeTool[] = []
   const skills: Array<{ id: string; name: string }> = []
@@ -53,8 +55,8 @@ export function createFakeContext(options: FakeOptions) {
     storage,
     session: {
       async synthetic(input: { sessionID: string; text: string }) {
-        options.onWake?.(input.sessionID, input.text)
-        log(`[wake ${input.sessionID}]\n${input.text}`)
+        if (options.onWake) options.onWake(input.sessionID, input.text)
+        else log(`[wake ${input.sessionID}]\n${input.text}`)
       },
       instructions: {
         entry: {
