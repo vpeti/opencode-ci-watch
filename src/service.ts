@@ -287,7 +287,7 @@ export class CiService {
       .find((entry) => targetKey(entry.target) === targetKey(target) && entry.include.join(",") === include.join(","))
 
     const subscription: Subscription = existing
-      ? { ...existing, expiresAt }
+      ? { ...existing, expiresAt, notify, delivery }
       : {
           id: this.deps.id?.() ?? randomUUID().slice(0, 8),
           sessionID,
@@ -305,7 +305,7 @@ export class CiService {
 
     const status = this.summaryFor(target)
     return {
-      content: `👀 watching ${describeTarget(target)} (${include.join("+")}) · ${status} · id ${subscription.id}`,
+      content: `👀 watching ${describeTarget(target)} (${include.join("+")}, notify ${notify}) · ${status} · id ${subscription.id}`,
       metadata: { id: subscription.id, target, include, notify: subscription.notify, sessionID },
     }
   }
