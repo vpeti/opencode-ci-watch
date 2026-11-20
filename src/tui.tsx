@@ -1,5 +1,4 @@
-import { appendFileSync } from "node:fs"
-import { createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
+import { createEffect, createMemo, createSignal, onCleanup, onMount, Show } from "solid-js"
 import { Plugin, usePlugin } from "@opencode/plugin/tui"
 import { CiRpc, type CiJobState, type CiState, type CiWatchState } from "./rpc.ts"
 
@@ -35,12 +34,6 @@ const SPIN_MS = 125
 
 const [frame, setFrame] = createSignal(0)
 const [now, setNow] = createSignal(Date.now())
-
-const debug = (line: string) => {
-  try {
-    appendFileSync("/tmp/ci-tui.log", `${new Date().toISOString()} ${line}\n`)
-  } catch {}
-}
 
 function tone(context: ReturnType<typeof usePlugin>, state: CheckState) {
   const feedback = context.theme.text.feedback
@@ -161,7 +154,6 @@ function Sidebar(props: { sessionID: string }) {
   const context = usePlugin()
   const [view, updateView] = context.storage.store("view", { initial: { open: true } })
   const [state, setState] = createSignal<CiState>()
-  debug(`sidebar mount session=${props.sessionID}`)
   const [loaded, setLoaded] = createSignal(false)
   const [error, setError] = createSignal(false)
   let reported = false
@@ -173,23 +165,13 @@ function Sidebar(props: { sessionID: string }) {
         { sessionID },
         { location, signal: AbortSignal.timeout(3_000) },
       )) as CiState
-      debug(`state ok session=${sessionID} watches=${next.watches.length}`)
       if (sessionID === props.sessionID) {
         setState(next)
         setLoaded(true)
         setError(false)
       }
-    } catch (cause) {
-      debug(`state error session=${sessionID} ${cause instanceof Error ? cause.message : String(cause)}`)
-      if (sessionID === props.sessionID) {
-        setError(true)
-        if (!reported) {
-          reported = true
-          const message = cause instanceof Error ? cause.message : String(cause)
-          console.error("ci: state unavailable", cause)
-          context.ui.toast.show({ message: `CI: ${message}`, variant: "error", duration: 10_000 })
-        }
-      }
+    } catch {
+      if (sessionID === props.sessionID) setError(true)
     }
   }
 
@@ -227,69 +209,56 @@ function Sidebar(props: { sessionID: string }) {
       })
   })
   const failed = createMemo(() => watches().filter((watch) => overall(watch) === "failed").length)
-  createEffect(() => {
-    const list = watches()
-    debug(`render session=${props.sessionID} state=${state() ? "yes" : "no"} watches=${list.length} targets=${list.map((watch) => `${watch.target.type}:${watch.target.value}`).join(",")}`)
-  })
-
-  if (error() && !state()) {
-    return (
-      <box flexDirection="column">
-        <text fg={context.theme.text.muted}>CI unavailable</text>
-      </box>
-    )
-  }
-  if (!state()) return null
-  if (watches().length === 0) {
-    return (
-      <box flexDirection="column">
-        <box flexDirection="row" gap={1}>
-          <text fg={context.theme.text.base}>
-            <b>CI</b>
-          </text>
-          <text fg={context.theme.text.muted}>no watches</text>
-        </box>
-      </box>
-    )
-  }
-
   return (
-    <box flexDirection="column">
-      <box
-        flexDirection="row"
-        gap={1}
-        onMouseDown={() => {
-          void updateView((draft) => {
-            draft.open = !draft.open
-          }).catch((error) => console.error("Failed to persist CI sidebar state", error))
-        }}
-      >
-        <text fg={context.theme.text.base}>{view.open ? "▼" : "▶"}</text>
-        <text fg={context.theme.text.base}>
-          <b>CI</b>
-        </text>
-        {view.open ? null : (
-          <text fg={context.theme.text.muted}>
-            ({watches().length} watched{failed() > 0 ? `, ${failed()} failed` : ""})
-          </text>
-        )}
-      </box>
-      {view.open
-        ? watches().map((watch) => (
-            <box flexDirection="column">
-              <WatchLine watch={watch} />
-              {jobsHidden(watch, now()) ? null : watch.jobs.map((job) => <CheckLine job={job} />)}
+    <Show when={state()}>
+      <box flexDirection="column">
+        <Show
+          when={watches().length > 0}
+          fallback={
+            <box flexDirection="row" gap={1}>
+              <text fg={context.theme.text.base}>
+                <b>CI</b>
+              </text>
+              <text fg={context.theme.text.muted}>no watches</text>
             </box>
-          ))
-        : null}
-    </box>
+          }
+        >
+          <box
+            flexDirection="row"
+            gap={1}
+            onMouseDown={() => {
+              void updateView((draft) => {
+                draft.open = !draft.open
+              }).catch((error) => console.error("Failed to persist CI sidebar state", error))
+            }}
+          >
+            <text fg={context.theme.text.base}>{view.open ? "▼" : "▶"}</text>
+            <text fg={context.theme.text.base}>
+              <b>CI</b>
+            </text>
+            {view.open ? null : (
+              <text fg={context.theme.text.muted}>
+                ({watches().length} watched{failed() > 0 ? `, ${failed()} failed` : ""})
+              </text>
+            )}
+          </box>
+          {view.open
+            ? watches().map((watch) => (
+                <box flexDirection="column">
+                  <WatchLine watch={watch} />
+                  {jobsHidden(watch, now()) ? null : watch.jobs.map((job) => <CheckLine job={job} />)}
+                </box>
+              ))
+            : null}
+        </Show>
+      </box>
+    </Show>
   )
 }
 
 export default Plugin.define({
   id: "ci",
   setup(context) {
-    debug("setup")
     let lastSecond = Math.floor(Date.now() / 1000)
     const tick = setInterval(() => {
       setFrame((value) => (value + 1) % SPINNER.length)
@@ -301,11 +270,8 @@ export default Plugin.define({
     }, SPIN_MS)
 
     context.ui.slot({
-      prepend: "sidebar.content",
-      render: (props) => {
-        debug(`slot render session=${props.sessionID}`)
-        return <Sidebar sessionID={props.sessionID} />
-      },
+      append: "sidebar.content",
+      render: (props) => <Sidebar sessionID={props.sessionID} />,
     })
     return () => clearInterval(tick)
   },
