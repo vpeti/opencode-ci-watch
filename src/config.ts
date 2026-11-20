@@ -13,7 +13,7 @@ export interface AgentRule {
 }
 
 export interface NotifyConfig {
-  /** Wake the session on a green workflow too. Default false: successes only update the status entry. */
+  /** Default for new subscriptions: wake on all-green, the signal that the work is done. */
   success: boolean
   /** How a failure enters the session: after the current step (queue) or into it (steer). */
   delivery: DeliveryMode
@@ -37,7 +37,7 @@ export const PROJECT_CONFIG_PATH = ".opencode/ci-watch.json"
 const DEFAULTS: Config = {
   disabled: false,
   host: "github.com",
-  notify: { success: false, delivery: "queue" },
+  notify: { success: true, delivery: "queue" },
   autoSubscribe: { onPush: false },
   forwarder: { idleTimeoutMinutes: 30, restartMax: 5 },
   maxLogChars: 1200,

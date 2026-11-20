@@ -12,7 +12,7 @@ import { normalizeDelivery } from "../src/events.ts"
 
 const silent: Logger = { info() {}, warn() {}, error() {} }
 
-const config: Config = {
+const baseConfig: Config = {
   disabled: false,
   host: "github.com",
   notify: { success: false, delivery: "queue" },
@@ -46,7 +46,11 @@ function storage(): StorageLike {
   }
 }
 
-function harness(options: { recent?: () => Promise<ReturnType<typeof run>[]> } = {}) {
+function harness(options: { recent?: () => Promise<ReturnType<typeof run>[]>; notifySuccess?: boolean; greenSettleMs?: number } = {}) {
+  const config: Config = {
+    ...baseConfig,
+    notify: { ...baseConfig.notify, success: options.notifySuccess ?? false },
+  }
   const statuses = new Map<string, string | undefined>()
   const wakes: Array<{ sessionID: string; text: string }> = []
   const notifier = {
@@ -99,6 +103,7 @@ function harness(options: { recent?: () => Promise<ReturnType<typeof run>[]> } =
     log: silent,
     currentBranch: async () => "main",
     now: () => 1_000_000,
+    greenSettleMs: options.greenSettleMs,
   })
   return { service, store, statuses, wakes, starts: () => starts }
 }
@@ -147,11 +152,12 @@ test("a green run updates the status line without waking by default", async () =
 })
 
 test("notify: all wakes on success", async () => {
-  const h = harness()
+  const h = harness({ greenSettleMs: 0 })
   await h.service.watch("ses_1", { branch: "main", notify: "all" })
   const delivery = normalizeDelivery("workflow_run", workflowRunPayload({ id: 1003, conclusion: "success" }))
   assert.ok(delivery)
   await h.service.onDelivery(delivery)
+  await new Promise((resolve) => setTimeout(resolve, 5))
   assert.equal(h.wakes.length, 1)
   assert.match(h.wakes[0]!.text, /^✅/)
 })
@@ -199,4 +205,25 @@ test("a quick green workflow does not hide a still-running one on the same commi
   assert.match(status, /⏳ 1 running/)
   assert.doesNotMatch(status, /✅/)
   assert.match(status, new RegExp(sha.slice(0, 7)))
+})
+
+test("notify.success makes the default subscription wait for every run to be green", async () => {
+  const h = harness({ notifySuccess: true, greenSettleMs: 0 })
+  await h.service.watch("ses_1", { branch: "main" })
+  assert.equal(h.store.list()[0]?.notify, "all")
+
+  const pending = normalizeDelivery("workflow_run", workflowRunPayload({ id: 2001, name: "CI", conclusion: null, status: "queued" }))
+  const merge = normalizeDelivery("workflow_run", workflowRunPayload({ id: 2002, name: "Auto-merge", conclusion: "success" }))
+  assert.ok(pending && merge)
+  await h.service.onDelivery(pending)
+  await h.service.onDelivery(merge)
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  assert.equal(h.wakes.length, 0)
+
+  const ci = normalizeDelivery("workflow_run", workflowRunPayload({ id: 2001, name: "CI", conclusion: "success" }))
+  assert.ok(ci)
+  await h.service.onDelivery(ci)
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  assert.equal(h.wakes.length, 1)
+  assert.match(h.wakes[0]!.text, /^✅ main · 2\/2 green/)
 })

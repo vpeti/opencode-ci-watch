@@ -18,7 +18,7 @@ test("defaults are conservative", async () => {
   const config = await loadConfig({ directory: await project(), options: {}, env: {} })
   assert.equal(config.disabled, false)
   assert.equal(config.host, "github.com")
-  assert.equal(config.notify.success, false)
+  assert.equal(config.notify.success, true)
   assert.equal(config.notify.delivery, "queue")
   assert.equal(config.autoSubscribe.onPush, false)
   assert.equal(config.maxLogChars, 1200)

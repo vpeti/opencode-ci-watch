@@ -15,8 +15,9 @@ The \`ci\` tools deliver CI events into this session. Do not poll \`gh run list\
 ## After pushing
 
 Call \`ci_watch\` with \`current: true\` (or the pushed branch). Then keep working. A failed run wakes
-you with the failing job, the step and a short log excerpt. A green run only updates the status
-line, so it costs no turn.
+you with the failing job, the step and a short log excerpt. Depending on the repository and the
+subscription, an all-green run also wakes you; that message means the work is done and it is time
+to finish. Use \`notify: "failures"\` when a green result should not interrupt you.
 
 ## When you must have the result before continuing
 

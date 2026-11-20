@@ -71,6 +71,8 @@ export interface ServiceDeps {
   readonly currentBranch: () => Promise<string | undefined>
   readonly now?: () => number
   readonly id?: () => string
+  /** Delay before an all-green wake, so a sibling workflow has time to register. */
+  readonly greenSettleMs?: number
 }
 
 interface Waiter {
@@ -93,6 +95,7 @@ export class CiService {
   private readonly waiters = new Set<Waiter>()
   private readonly suppressed = new Map<string, Set<string>>()
   private readonly notified = new Map<string, number>()
+  private readonly greenTimers = new Map<string, NodeJS.Timeout>()
   private idleTimer: NodeJS.Timeout | undefined
 
   constructor(deps: ServiceDeps) {
@@ -128,6 +131,8 @@ export class CiService {
       waiter.finish({ outcome: "cancelled", content: "ci wait cancelled: the plugin is shutting down", metadata: {} })
     }
     this.waiters.clear()
+    for (const timer of this.greenTimers.values()) clearTimeout(timer)
+    this.greenTimers.clear()
     await this.deps.forwarder.stop()
   }
 
@@ -221,6 +226,38 @@ export class CiService {
     return `${parts.join(" · ")}${label}`
   }
 
+  /** True when every run known for this commit has finished without a failure. */
+  private settledFor(target: Target, sha: string): boolean {
+    const runs =
+      target.type === "branch"
+        ? this.deps.cache.forBranch(this.slug, target.value, 20)
+        : target.type === "sha"
+          ? this.deps.cache.forSha(this.slug, target.value, 20)
+          : [this.deps.cache.get(this.slug, Number(target.value))].filter((run): run is RunInfo => run !== undefined)
+    const forSha = runs.filter((run) => run.sha === sha)
+    return forSha.length > 0 && forSha.every(isTerminal) && !forSha.some(isFailure)
+  }
+
+  private scheduleGreen(subscription: Subscription, sha: string): void {
+    const key = `${subscription.id}:${sha}`
+    if (this.greenTimers.has(key)) return
+    const timer = setTimeout(() => {
+      this.greenTimers.delete(key)
+      if (!this.settledFor(subscription.target, sha)) return
+      void this.deps.notifier.wake(
+        subscription.sessionID,
+        this.greenNotice(subscription.target),
+        subscription.delivery,
+      )
+    }, this.deps.greenSettleMs ?? 5_000)
+    timer.unref()
+    this.greenTimers.set(key, timer)
+  }
+
+  private greenNotice(target: Target): string {
+    return `✅ ${describeTarget(target)} · ${this.summaryFor(target).replace(/^✅ /, "")}`
+  }
+
   private latestRun(target: Target): RunInfo | undefined {
     const base = this.deps.cache
     if (target.type === "branch") return base.forBranch(this.slug, target.value, 1)[0]
@@ -235,7 +272,12 @@ export class CiService {
     const target = await this.resolveTarget(input)
     const requested = (input.include ?? []).filter((entry): entry is Include => entry === "runs" || entry === "pushes")
     const include = requested.length > 0 ? [...new Set(requested)] : (["runs"] as Include[])
-    const notify: NotifyMode = input.notify === "all" || input.notify === "none" ? input.notify : "failures"
+    const notify: NotifyMode =
+      input.notify === "all" || input.notify === "none" || input.notify === "failures"
+        ? input.notify
+        : this.deps.config.notify.success
+          ? "all"
+          : "failures"
     const delivery: DeliveryMode = input.delivery === "steer" ? "steer" : this.deps.config.notify.delivery
     const ttlMinutes = Math.min(7 * 24 * 60, Math.max(5, input.ttlMinutes ?? 24 * 60))
     const expiresAt = this.now + ttlMinutes * 60 * 1000
@@ -582,13 +624,12 @@ export class CiService {
       this.notified.set(dedupe, this.now)
       this.trimNotified()
 
-      const shouldWake =
-        !this.isSuppressed(subscription.sessionID, subscription.target) &&
-        subscription.notify !== "none" &&
-        (isFailure(run) || subscription.notify === "all" || (isSuccess(run) && this.deps.config.notify.success))
-
-      if (shouldWake && message) {
+      const suppressed = this.isSuppressed(subscription.sessionID, subscription.target)
+      if (!suppressed && isFailure(run) && subscription.notify !== "none" && message) {
         await this.deps.notifier.wake(subscription.sessionID, message, subscription.delivery)
+      }
+      if (!suppressed && isSuccess(run) && subscription.notify === "all") {
+        this.scheduleGreen(subscription, run.sha)
       }
     }
 
@@ -658,6 +699,6 @@ export class CiService {
 
   async autoSubscribe(sessionID: string): Promise<void> {
     const branch = await this.currentBranch()
-    await this.watch(sessionID, { branch, include: ["runs"], notify: "failures" })
+    await this.watch(sessionID, { branch, include: ["runs"] })
   }
 }

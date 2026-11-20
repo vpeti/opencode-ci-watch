@@ -56,7 +56,7 @@ child processes.
   "repo": "owner/name",                 // default: resolved from the git remote
   "account": "your-gh-login",           // default: user-level option
   "autoSubscribe": { "onPush": false }, // opt-in: watch the branch after `git push`
-  "notify": { "success": false },       // false: green runs only update the status line
+  "notify": { "success": true },        // all-green wakes the agent; false: status line only
   "maxLogChars": 1200,
   "agents": {
     "*": { "tools": "read" },           // ci_status + ci_log everywhere
@@ -90,7 +90,8 @@ How delivery works:
 
 - **failure** → synthetic message, waking an idle session (queued after the current step by
   default; `delivery: "steer"` injects into it)
-- **success** → `<context key="ci">` status line only, no turn queued
+- **success** → one synthetic message once every run on the commit is green, the signal that the
+  work is done; `notify: "failures"` turns it into a status-line-only update
 - **push** → synthetic message, only for subscriptions with `include: ["pushes"]`
 - **forwarder broken** → one warning in the status line
 
