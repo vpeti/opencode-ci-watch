@@ -159,5 +159,5 @@ the default branch, and exposes:
 - merged branches turn purple, drop their contents, and stay until the subscription ends;
 - all-green branches collapse their jobs after five seconds but keep the branch and workflow rows.
 
-The section refreshes from the `ci.updated` RPC event, shows a short `CI no watches` state when
+The section refreshes from the `ci.updated` RPC event, shows a short `GitHub no watches` state when
 nothing is subscribed, and stays hidden when the server plugin is unavailable.

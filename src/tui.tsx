@@ -266,7 +266,7 @@ function Sidebar(props: { sessionID: string }) {
           fallback={
             <box flexDirection="row" gap={1}>
               <text fg={context.theme.text.base}>
-                <b>CI</b>
+                <b>GitHub</b>
               </text>
               <text fg={context.theme.text.muted}>no watches</text>
             </box>
@@ -283,7 +283,7 @@ function Sidebar(props: { sessionID: string }) {
           >
             <text fg={context.theme.text.base}>{view.open ? "▼" : "▶"}</text>
             <text fg={context.theme.text.base}>
-              <b>CI</b>
+              <b>GitHub</b>
             </text>
             {view.open ? null : (
               <text fg={context.theme.text.muted}>
