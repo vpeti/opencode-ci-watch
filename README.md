@@ -154,5 +154,5 @@ the default branch, and exposes:
 - merged branches turn purple, drop their jobs, and stay until the subscription ends;
 - all-green branches collapse their jobs after five seconds but keep the row.
 
-The section refreshes from the `ci.updated` RPC event and hides itself when the repository has no
-watches or the server plugin is unavailable.
+The section refreshes from the `ci.updated` RPC event, shows a short `CI no watches` state when
+nothing is subscribed, and stays hidden when the server plugin is unavailable.

@@ -154,6 +154,7 @@ function Sidebar(props: { sessionID: string }) {
   const context = usePlugin()
   const [view, updateView] = context.storage.store("view", { initial: { open: true } })
   const [state, setState] = createSignal<CiState>()
+  const [loaded, setLoaded] = createSignal(false)
   const [error, setError] = createSignal(false)
 
   const refresh = async (sessionID: string) => {
@@ -161,6 +162,7 @@ function Sidebar(props: { sessionID: string }) {
       const next = (await context.client.rpc(CiRpc).state({ sessionID })) as CiState
       if (sessionID === props.sessionID) {
         setState(next)
+        setLoaded(true)
         setError(false)
       }
     } catch {
@@ -177,7 +179,17 @@ function Sidebar(props: { sessionID: string }) {
     const stop = context.client.rpc(CiRpc).events.on("updated", (event) => {
       if (event.data.sessionID === props.sessionID) void refresh(props.sessionID)
     })
-    onCleanup(stop)
+    // The TUI can mount before the server is ready, and a reconnect replaces the
+    // client. Retry quickly until the first snapshot, then keep a slow safety net.
+    const retry = setInterval(() => {
+      if (!loaded() || error()) void refresh(props.sessionID)
+    }, 2_000)
+    const safety = setInterval(() => void refresh(props.sessionID), 30_000)
+    onCleanup(() => {
+      stop()
+      clearInterval(retry)
+      clearInterval(safety)
+    })
   })
 
   const watches = createMemo(() => {
@@ -194,7 +206,19 @@ function Sidebar(props: { sessionID: string }) {
   const failed = createMemo(() => watches().filter((watch) => overall(watch) === "failed").length)
 
   // In projects without a usable server plugin the section stays hidden.
-  if (error() || !state() || watches().length === 0) return null
+  if (!state()) return null
+  if (watches().length === 0) {
+    return (
+      <box flexDirection="column">
+        <box flexDirection="row" gap={1}>
+          <text fg={context.theme.text.base}>
+            <b>CI</b>
+          </text>
+          <text fg={context.theme.text.muted}>no watches</text>
+        </box>
+      </box>
+    )
+  }
 
   return (
     <box flexDirection="column">
