@@ -135,3 +135,13 @@ Tests execute the `.ts` sources directly through Node's type stripping, so devel
 test transpiler in the dependency tree.
 
 `PLAN.md` is intentionally not tracked; it is a local design document.
+
+## TUI prototype
+
+`src/tui.tsx` exports a TUI part backed by mock data: a `CI` section in the sidebar with one
+summary line per watched branch and only the failing/running checks, plus a `session.panel` with
+every check name, status label and duration. Open it from the command palette (`CI: watched
+checks`) or `/ci`.
+
+It is deliberately not wired to the server part yet; delete the `./tui` export from
+`package.json` to remove it.

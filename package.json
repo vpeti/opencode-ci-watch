@@ -4,7 +4,8 @@
   "description": "OpenCode plugin: branch, commit and run scoped GitHub Actions watching without polling",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./tui": "./src/tui.tsx"
   },
   "files": [
     "src",
@@ -29,7 +30,11 @@
     "@opencode/plugin": "latest"
   },
   "devDependencies": {
+    "@opencode/theme": "^2.3.2",
+    "@opentui/core": "^0.9.6",
+    "@opentui/solid": "^0.9.6",
     "@types/node": "^26.6.6",
+    "solid-js": "^1.9.20",
     "typescript": "^7.0.2"
   }
 }
