@@ -18,6 +18,10 @@ export interface ForwarderOptions {
   readonly token?: string
   readonly restartMax: number
   readonly log: Logger
+  /** History loaded from plugin storage after a reload. */
+  readonly initialEvents?: readonly ForwarderEvent[]
+  /** Called for every transition so the caller can persist it. */
+  readonly onEvent?: (event: ForwarderEvent) => void
   /** Runs before the child is spawned, for example to snapshot repository hooks. */
   readonly beforeStart?: () => Promise<void> | void
   /** Runs once the websocket is attached, for example to adopt the dev webhook it created. */
@@ -37,10 +41,11 @@ export class Forwarder {
   private attempts = 0
   private current: ForwarderState = "stopped"
   private failure: string | undefined
-  private readonly events: ForwarderEvent[] = []
+  private readonly events: ForwarderEvent[]
 
   constructor(options: ForwarderOptions) {
     this.options = options
+    this.events = [...(options.initialEvents ?? [])].slice(-30)
   }
 
   get state(): ForwarderState {
@@ -57,8 +62,14 @@ export class Forwarder {
   }
 
   private record(state: ForwarderState, message: string): void {
-    this.events.push({ at: Date.now(), state, message })
+    const event = { at: Date.now(), state, message }
+    this.events.push(event)
     if (this.events.length > 30) this.events.shift()
+    try {
+      this.options.onEvent?.(event)
+    } catch {
+      // Diagnostics must never affect the transport.
+    }
   }
 
   async start(): Promise<void> {
