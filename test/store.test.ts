@@ -81,11 +81,11 @@ test("run cache keeps runs per repository and branch", () => {
 
 test("keeps subscriptions scoped to their repository", async () => {
   const storage = memoryStorage()
-  const widgets = new SubscriptionStore(storage, "acme/widgets")
+  const widgetsStore = new SubscriptionStore(storage, "acme/widgets")
   const other = new SubscriptionStore(storage, "acme/other")
 
-  await widgets.save({
-    id: "widgets",
+  await widgetsStore.save({
+    id: "first",
     repo: "acme/widgets",
     sessionID: "ses_1",
     target: { type: "branch", value: "main" },
@@ -109,9 +109,9 @@ test("keeps subscriptions scoped to their repository", async () => {
   await other.load()
   assert.equal(other.list().length, 0)
 
-  await widgets.load()
-  assert.equal(widgets.list().length, 1)
-  assert.equal(widgets.list()[0]?.repo, "acme/widgets")
+  await widgetsStore.load()
+  assert.equal(widgetsStore.list().length, 1)
+  assert.equal(widgetsStore.list()[0]?.repo, "acme/widgets")
 })
 
 test("the delivery ledger claims a key once across instances", async () => {

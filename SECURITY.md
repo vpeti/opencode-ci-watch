@@ -7,9 +7,8 @@ released as patch versions.
 
 ## Reporting a vulnerability
 
-Please use GitHub's private vulnerability reporting:
-
-<https://github.com/OWNER/opencode-ci-watch/security/advisories/new>
+Please use the repository's **Security → Advisories → Report a vulnerability** page (GitHub
+private vulnerability reporting).
 
 Do not open a public issue for a security problem. Include reproduction steps and the affected
 version. You can expect an acknowledgement within a few days.

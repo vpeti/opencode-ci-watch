@@ -6,7 +6,11 @@ import { join } from "node:path"
 import plugin from "../src/index.ts"
 import { createFakeContext } from "./fake-context.ts"
 
-const repo = process.argv[2] ?? "OWNER/opencode-ci-watch"
+const repo = process.argv[2] ?? process.env.CI_WATCH_REPO
+if (!repo) {
+  console.error("usage: node scripts/smoke.ts <owner/repo> [account]")
+  process.exit(1)
+}
 const account = process.argv[3]
 
 const fake = createFakeContext({ repo, account, directory: join(process.cwd(), ".smoke") })

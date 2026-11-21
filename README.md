@@ -135,8 +135,6 @@ Tests execute the `.ts` sources directly through Node's type stripping, so devel
 **Node 24+**; the plugin itself only needs Node 20 when OpenCode loads it. There is no bundler or
 test transpiler in the dependency tree.
 
-`PLAN.md` is intentionally not tracked; it is a local design document.
-
 ## Server RPC
 
 The server forwards `workflow_job` and `pull_request`, caches job state in workflow order, resolves
