@@ -3,7 +3,7 @@ import { Plugin, Skill } from "@opencode/plugin"
 import { applyAgentTransforms, ruleFor } from "./agents.ts"
 import { loadConfig, type Config } from "./config.ts"
 import { normalizeDelivery } from "./events.ts"
-import { Forwarder } from "./forwarder.ts"
+import { Forwarder, type ForwarderEvent } from "./forwarder.ts"
 import { listAccounts, resolveAccount } from "./github/accounts.ts"
 import { Enricher } from "./github/enrich.ts"
 import { Gh } from "./github/gh.ts"
@@ -101,6 +101,22 @@ export default Plugin.define({
       logger.warn("cannot read the default branch; assuming main", { error: errorMessage(error) })
     }
 
+    const storage = ctx.storage as unknown as StorageLike
+    const historyKey = `diag/forwarder/${repo.slug}`
+    const saved = await storage.get(historyKey).catch(() => undefined)
+    const forwarderHistory = Array.isArray(saved)
+      ? saved
+          .filter(
+            (event): event is ForwarderEvent =>
+              typeof event === "object" &&
+              event !== null &&
+              typeof (event as ForwarderEvent).at === "number" &&
+              typeof (event as ForwarderEvent).state === "string" &&
+              typeof (event as ForwarderEvent).message === "string",
+          )
+          .slice(-30)
+      : []
+
     const secret = randomBytes(32).toString("hex")
     let service: CiService | undefined
     let emitState: ((sessionID: string) => void) | undefined
@@ -138,12 +154,17 @@ export default Plugin.define({
       token,
       restartMax: config.forwarder.restartMax,
       log: logger,
+      initialEvents: forwarderHistory,
+      onEvent: (event) => {
+        forwarderHistory.push(event)
+        if (forwarderHistory.length > 30) forwarderHistory.shift()
+        void storage.set(historyKey, [...forwarderHistory]).catch(() => {})
+      },
       beforeStart: () => hooks.snapshot(),
       onAttached: () => hooks.adopt(),
       onStopped: () => hooks.removeOwned(),
     })
 
-    const storage = ctx.storage as unknown as StorageLike
     const store = new SubscriptionStore(storage, repo.slug)
     const notifier = new Notifier(ctx.session as unknown as SessionApiLike, logger)
     const ci = new CiService({

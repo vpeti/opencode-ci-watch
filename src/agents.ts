@@ -24,14 +24,15 @@ export function deniedTools(mode: AgentToolMode): PermissionRule[] {
 export function agentNote(mode: AgentToolMode): string | undefined {
   if (mode === "all") {
     return (
-      "GitHub Actions: this repository exposes the `ci` tools. After pushing a branch, call `ci_watch` " +
-      "for that branch (or `current: true`) instead of polling `gh`. Failures arrive with the failing job and a " +
-      "log excerpt; green runs only update the status entry. When coordinating merges, watch the branch with " +
-      '`include: ["pushes"]` and follow only the commits that matter to you.'
+      "GitHub Actions: this repository exposes the `ci` tools. After pushing a branch, call the watch " +
+      "tool (`ci.watch` in Code Mode, `ci_watch` outside it) for that branch (or `current: true`) instead " +
+      "of polling `gh`. Failures arrive with the failing job and a log excerpt; green runs only update the " +
+      'status entry. When coordinating merges, watch the branch with `include: ["pushes"]` and follow only ' +
+      "the commits that matter to you."
     )
   }
   if (mode === "read") {
-    return "GitHub Actions: use `ci_status` and `ci_log` for deliberate checks. Watching is disabled for this agent; do not poll `gh`."
+    return "GitHub Actions: use the status and log tools (`ci.status`/`ci.log`, or `ci_status`/`ci_log` outside Code Mode) for deliberate checks. Watching is disabled for this agent; do not poll `gh`."
   }
   return undefined
 }

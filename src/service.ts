@@ -76,6 +76,8 @@ export interface ServiceDeps {
   readonly id?: () => string
   /** Delay before an all-green wake, so a sibling workflow has time to register. */
   readonly greenSettleMs?: number
+  /** Delay before resolving a waiter once every run is terminal. */
+  readonly settleMs?: number
   /** Called after a subscription, run, job or merge changes so the TUI can refetch. */
   readonly onStateChanged?: (sessionID: string) => void
   /** Cross-process claim so two plugin instances do not wake the same session twice. */
@@ -90,12 +92,47 @@ interface Waiter {
   readonly runs: Map<number, RunInfo>
   readonly startedAt: number
   settle: NodeJS.Timeout | undefined
+  finished: boolean
   finish: (result: ToolResult & { outcome: string }) => void
 }
 
 const DAY = 24 * 60 * 60 * 1000
+const REPLAY_WINDOW_MS = DAY
 const MAX_STATUS_LINES = 6
 const SETTLE_MS = 15_000
+const WAITER_KEY = "__opencodeCiWatchWaiters"
+
+/** Waiters parked by a stopped plugin instance, so a reload can adopt them. */
+function detachedWaiters(): Set<Waiter> {
+  const holder = globalThis as typeof globalThis & { [WAITER_KEY]?: Set<Waiter> }
+  return (holder[WAITER_KEY] ??= new Set<Waiter>())
+}
+
+const INCLUDE_ORDER: readonly Include[] = ["runs", "pushes"]
+const NOTIFY_RANK: Record<NotifyMode, number> = { none: 0, failures: 1, all: 2 }
+
+function mergeInclude(left: readonly Include[], right: readonly Include[]): Include[] {
+  return INCLUDE_ORDER.filter((entry) => left.includes(entry) || right.includes(entry))
+}
+
+function mergeSubscriptions(base: Subscription, extra: Subscription): Subscription {
+  return {
+    ...base,
+    include: mergeInclude(base.include, extra.include),
+    notify: NOTIFY_RANK[extra.notify] > NOTIFY_RANK[base.notify] ? extra.notify : base.notify,
+    delivery: base.delivery === "steer" || extra.delivery === "steer" ? "steer" : "queue",
+    createdAt: Math.min(base.createdAt, extra.createdAt),
+    expiresAt: Math.max(base.expiresAt, extra.expiresAt),
+    mergedAt: extra.mergedAt ?? base.mergedAt,
+  }
+}
+
+function runTime(run: RunInfo): number | undefined {
+  const value = run.updatedAt ?? run.createdAt ?? run.startedAt
+  if (!value) return undefined
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
 
 export class CiService {
   private readonly deps: ServiceDeps
@@ -121,22 +158,27 @@ export class CiService {
   async start(): Promise<void> {
     await this.deps.store.load()
     await this.deps.store.prune(this.now)
+    await this.compactSubscriptions()
     if (this.deps.store.size > 0) await this.ensureForwarder()
     const sessions = new Set(this.deps.store.list().map((entry) => entry.sessionID))
     for (const sessionID of sessions) await this.refreshStatus(sessionID)
     for (const target of new Map(this.deps.store.list().map((entry) => [targetKey(entry.target), entry.target])).values()) {
-      void this.reconcile(target).catch((error) => {
+      await this.reconcile(target, true).catch((error) => {
         this.deps.log.warn(`cannot reconcile ${targetKey(target)}`, { error: errorMessage(error) })
       })
     }
+    await this.adoptWaiters()
   }
 
   async stop(): Promise<void> {
     if (this.idleTimer) clearTimeout(this.idleTimer)
     this.idleTimer = undefined
+    // A reload creates a new service in the same process. Park pending waits so
+    // that instance can adopt them instead of resolving every caller as cancelled.
     for (const waiter of this.waiters) {
       if (waiter.settle) clearTimeout(waiter.settle)
-      waiter.finish({ outcome: "cancelled", content: "ci wait cancelled: the plugin is shutting down", metadata: {} })
+      waiter.settle = undefined
+      if (!waiter.finished) detachedWaiters().add(waiter)
     }
     this.waiters.clear()
     for (const timer of this.greenTimers.values()) clearTimeout(timer)
@@ -144,12 +186,60 @@ export class CiService {
     await this.deps.forwarder.stop()
   }
 
+  /** Collapse duplicate subscriptions left by reloads or overlapping watches. */
+  private async compactSubscriptions(): Promise<void> {
+    const sessions = new Set(this.deps.store.list().map((entry) => entry.sessionID))
+    for (const sessionID of sessions) {
+      const byTarget = new Map<string, Subscription>()
+      for (const subscription of this.deps.store.bySession(sessionID)) {
+        const key = targetKey(subscription.target)
+        const base = byTarget.get(key)
+        if (!base) {
+          byTarget.set(key, subscription)
+          continue
+        }
+        const merged = mergeSubscriptions(base, subscription)
+        byTarget.set(key, merged)
+        await this.deps.store.remove(subscription.id)
+        await this.deps.store.save(merged)
+      }
+    }
+  }
+
+  /** Reattach waits parked by a previous plugin instance in this process. */
+  private async adoptWaiters(): Promise<void> {
+    const waiters = [...detachedWaiters()]
+    if (waiters.length === 0) return
+    const targets = new Map<string, Target>()
+    for (const waiter of waiters) targets.set(targetKey(waiter.target), waiter.target)
+    for (const target of targets.values()) {
+      await this.reconcile(target).catch((error) => {
+        this.deps.log.warn(`cannot reconcile a parked wait for ${targetKey(target)}`, { error: errorMessage(error) })
+      })
+    }
+    for (const waiter of waiters) {
+      detachedWaiters().delete(waiter)
+      if (waiter.finished) continue
+      this.waiters.add(waiter)
+      this.suppress(waiter.sessionID, waiter.target)
+      const finish = waiter.finish
+      waiter.finish = (result) => {
+        this.unsuppress(waiter.sessionID, waiter.target)
+        finish(result)
+      }
+      for (const run of this.cachedRuns(waiter.target, 20)) this.considerWaiter(waiter, run)
+    }
+  }
+
   health(): string | undefined {
     const state = this.deps.forwarder.state
     if (state === "running" || state === "starting") return undefined
     if (state === "stopped" && this.deps.store.size === 0) return undefined
     const detail = this.deps.forwarder.lastError
-    return `⚠️ ci event stream: ${state}${detail ? ` (${detail})` : ""}`
+    const last = this.deps.forwarder.history?.at(-1)
+    const when = last ? new Date(last.at).toISOString().slice(11, 19) : undefined
+    const trace = last && when ? ` · last ${last.state} at ${when}` : ""
+    return `⚠️ ci event stream: ${state}${detail ? ` (${detail})` : ""}${trace}`
   }
 
   async ensureForwarder(): Promise<void> {
@@ -352,7 +442,12 @@ export class CiService {
   async watch(sessionID: string, input: WatchInput): Promise<ToolResult> {
     const target = await this.resolveTarget(input)
     const requested = (input.include ?? []).filter((entry): entry is Include => entry === "runs" || entry === "pushes")
-    const include = requested.length > 0 ? [...new Set(requested)] : (["runs"] as Include[])
+    const requestedInclude = requested.length > 0 ? [...new Set(requested)] : (["runs"] as Include[])
+    const matches = this.deps.store
+      .bySession(sessionID)
+      .filter((entry) => targetKey(entry.target) === targetKey(target))
+    const existing = matches[0]
+    const include = existing ? mergeInclude(existing.include, requestedInclude) : requestedInclude
     const notify: NotifyMode =
       input.notify === "all" || input.notify === "none" || input.notify === "failures"
         ? input.notify
@@ -363,12 +458,9 @@ export class CiService {
     const ttlMinutes = Math.min(7 * 24 * 60, Math.max(5, input.ttlMinutes ?? 24 * 60))
     const expiresAt = this.now + ttlMinutes * 60 * 1000
 
-    const existing = this.deps.store
-      .bySession(sessionID)
-      .find((entry) => targetKey(entry.target) === targetKey(target) && entry.include.join(",") === include.join(","))
-
+    for (const duplicate of matches.slice(1)) await this.deps.store.remove(duplicate.id)
     const subscription: Subscription = existing
-      ? { ...existing, expiresAt, notify, delivery, mergedAt: undefined }
+      ? { ...existing, include, expiresAt, notify, delivery, mergedAt: undefined }
       : {
           id: this.deps.id?.() ?? randomUUID().slice(0, 8),
           repo: this.slug,
@@ -425,7 +517,7 @@ export class CiService {
     }
   }
 
-  private async reconcile(target: Target): Promise<void> {
+  private async reconcile(target: Target, replay = false): Promise<void> {
     if (target.type === "branch") {
       const runs = await this.deps.enricher.recentRuns(target.value, 10)
       for (const run of runs) this.deps.cache.set(this.slug, run, this.now)
@@ -446,6 +538,7 @@ export class CiService {
         await this.refreshStatus(sessionID)
         this.changed(sessionID)
       }
+      if (replay) await this.replayRuns(runs, target)
       return
     }
     if (target.type === "sha") {
@@ -468,16 +561,42 @@ export class CiService {
         await this.refreshStatus(sessionID)
         this.changed(sessionID)
       }
+      if (replay) await this.replayRuns(runs, target)
       return
     }
     const run = await this.deps.enricher.run(Number(target.value))
     if (run) {
       this.deps.cache.set(this.slug, run, this.now)
       if (this.deps.jobs.forRun(run.id).length === 0) await this.fetchJobs(run)
+      if (replay && isTerminal(run)) await this.onRun(run)
       for (const entry of this.deps.store.list()) {
         if (entry.target.type === "run" && entry.target.value === String(run.id)) this.changed(entry.sessionID)
       }
     }
+  }
+
+  /**
+   * Deliver terminal runs that finished while the plugin was unloaded. The
+   * delivery ledger keeps runs already notified from being replayed, so this can
+   * safely look at the recent window on every reload.
+   */
+  private async replayRuns(runs: readonly RunInfo[], target: Target): Promise<void> {
+    const subscriptions = this.deps.store
+      .list()
+      .filter((entry) => targetKey(entry.target) === targetKey(target))
+    if (subscriptions.length === 0) return
+    const since = Math.min(...subscriptions.map((entry) => entry.createdAt))
+    // Only the recent past is replayed. A session that returns after days or
+    // months must not get a backlog of old run notifications.
+    const cutoff = this.now - REPLAY_WINDOW_MS
+    const candidates = runs
+      .filter((run) => isTerminal(run))
+      .filter((run) => {
+        const at = runTime(run)
+        return at !== undefined && at >= since && at >= cutoff
+      })
+      .sort((left, right) => (runTime(left) ?? 0) - (runTime(right) ?? 0))
+    for (const run of candidates) await this.onRun(run)
   }
 
   private async fetchJobs(run: RunInfo): Promise<JobInfo[]> {
@@ -671,10 +790,14 @@ export class CiService {
         runs: new Map(baseline.runs.map((run) => [run.id, run])),
         startedAt: this.now,
         settle: undefined,
+        finished: false,
         finish: (result) => {
+          if (waiter.finished) return
+          waiter.finished = true
           if (waiter.settle) clearTimeout(waiter.settle)
           clearTimeout(timer)
           this.waiters.delete(waiter)
+          detachedWaiters().delete(waiter)
           this.unsuppress(sessionID, target)
           resolve({ content: result.content, metadata: result.metadata })
         },
@@ -782,6 +905,10 @@ export class CiService {
   }
 
   private async onRun(run: RunInfo): Promise<void> {
+    if (this.deps.cache.isStale(this.slug, run)) {
+      this.deps.log.info("ignored a stale run delivery", { id: run.id, attempt: run.attempt })
+      return
+    }
     this.deps.cache.set(this.slug, run, this.now)
 
     const subscriptions = this.deps.store.list().filter((subscription) => matchesRun(subscription, run))
@@ -926,7 +1053,7 @@ export class CiService {
         const result = this.waitResult(settled, "completed")
         waiter.finish({ outcome: "completed", content: result.content, metadata: result.metadata })
       }
-    }, SETTLE_MS)
+    }, this.deps.settleMs ?? SETTLE_MS)
     waiter.settle.unref()
   }
 

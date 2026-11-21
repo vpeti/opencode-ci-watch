@@ -4,6 +4,12 @@ import type { Logger } from "./types.ts"
 
 export type ForwarderState = "stopped" | "starting" | "running" | "restarting" | "forbidden" | "error"
 
+export interface ForwarderEvent {
+  readonly at: number
+  readonly state: ForwarderState
+  readonly message: string
+}
+
 export interface ForwarderOptions {
   readonly repo: string
   readonly url: string
@@ -12,6 +18,10 @@ export interface ForwarderOptions {
   readonly token?: string
   readonly restartMax: number
   readonly log: Logger
+  /** History loaded from plugin storage after a reload. */
+  readonly initialEvents?: readonly ForwarderEvent[]
+  /** Called for every transition so the caller can persist it. */
+  readonly onEvent?: (event: ForwarderEvent) => void
   /** Runs before the child is spawned, for example to snapshot repository hooks. */
   readonly beforeStart?: () => Promise<void> | void
   /** Runs once the websocket is attached, for example to adopt the dev webhook it created. */
@@ -31,9 +41,11 @@ export class Forwarder {
   private attempts = 0
   private current: ForwarderState = "stopped"
   private failure: string | undefined
+  private readonly events: ForwarderEvent[]
 
   constructor(options: ForwarderOptions) {
     this.options = options
+    this.events = [...(options.initialEvents ?? [])].slice(-30)
   }
 
   get state(): ForwarderState {
@@ -44,10 +56,27 @@ export class Forwarder {
     return this.failure
   }
 
+  /** Recent lifecycle transitions, so a dead forwarder leaves a trace in state. */
+  get history(): readonly ForwarderEvent[] {
+    return [...this.events]
+  }
+
+  private record(state: ForwarderState, message: string): void {
+    const event = { at: Date.now(), state, message }
+    this.events.push(event)
+    if (this.events.length > 30) this.events.shift()
+    try {
+      this.options.onEvent?.(event)
+    } catch {
+      // Diagnostics must never affect the transport.
+    }
+  }
+
   async start(): Promise<void> {
     if (this.child || this.stopping) return
     this.attempts = 0
     await this.options.beforeStart?.()
+    this.record("starting", "starting gh webhook forward")
     this.spawnChild()
   }
 
@@ -100,14 +129,17 @@ export class Forwarder {
       this.child = undefined
       if (this.stopping) {
         this.current = "stopped"
+        this.record("stopped", "stopped")
         return
       }
       if (this.current === "forbidden") {
         this.current = "stopped"
+        this.record("stopped", "stopped after a forbidden webhook")
         return
       }
       if (this.current === "error" && code === null && signal === null) return
       this.failure = `gh webhook forward exited (${signal ? `signal ${signal}` : `code ${code}`})`
+      this.record("restarting", this.failure)
       this.scheduleRestart()
     })
   }
@@ -117,6 +149,7 @@ export class Forwarder {
       this.attempts = 0
       this.failure = undefined
       this.current = "running"
+      this.record("running", "attached")
       this.options.log.info("webhook forwarder attached", { repo: this.options.repo })
       void Promise.resolve(this.options.onAttached?.()).catch((error) => {
         this.options.log.warn("attached hook callback failed", { error: String(error) })
@@ -126,6 +159,7 @@ export class Forwarder {
     if (line.includes("you do not have access to this feature")) {
       this.failure = "this gh account cannot create dev webhooks on the repository (403)"
       this.current = "forbidden"
+      this.record("forbidden", this.failure)
       this.options.log.error("webhook forwarder is not permitted", { repo: this.options.repo })
       return
     }
@@ -150,6 +184,7 @@ export class Forwarder {
     const delay = BACKOFF_MS[Math.min(this.attempts, BACKOFF_MS.length - 1)] ?? 60_000
     this.attempts += 1
     this.current = "restarting"
+    this.record("restarting", `retry ${this.attempts} in ${delay}ms`)
     this.options.log.warn("restarting webhook forwarder", { delayMs: delay, attempt: this.attempts })
     this.retryTimer = setTimeout(() => {
       this.retryTimer = undefined
@@ -161,6 +196,7 @@ export class Forwarder {
   private fail(message: string): void {
     this.failure = message
     this.current = "error"
+    this.record("error", message)
     this.options.log.error(message, { repo: this.options.repo })
   }
 
@@ -173,6 +209,7 @@ export class Forwarder {
     const child = this.child
     if (!child) {
       this.current = "stopped"
+      this.record("stopped", "stopped")
       return
     }
     await new Promise<void>((resolve) => {
@@ -193,6 +230,7 @@ export class Forwarder {
     })
     this.child = undefined
     this.current = "stopped"
+    this.record("stopped", "stopped")
     await this.options.onStopped?.()
   }
 }
