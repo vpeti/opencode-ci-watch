@@ -10,24 +10,28 @@ export const SKILL_PATH = "/opencode-ci-watch/SKILL.md"
 export const SKILL_CONTENT = `# Watching GitHub Actions
 
 The \`ci\` tools deliver CI events into this session. Do not poll \`gh run list\`, \`gh pr checks\` or
-\`ci_status\` in a loop.
+\`ci.status\` in a loop. In Code Mode they are called as \`ci.watch\`, \`ci.wait\`, \`ci.status\`,
+\`ci.log\` and \`ci.unwatch\`; outside Code Mode the same tools appear as \`ci_watch\`, \`ci_wait\`,
+\`ci_status\`, \`ci_log\` and \`ci_unwatch\`.
 
 ## After pushing
 
-Call \`ci_watch\` with \`current: true\` (or the pushed branch). Then keep working. A failed run wakes
-you with the failing job, the step and a short log excerpt. Depending on the repository and the
-subscription, an all-green run also wakes you; that message means the work is done and it is time
-to finish. Use \`notify: "failures"\` when a green result should not interrupt you.
+Call the watch tool (\`ci.watch\` / \`ci_watch\`) with \`current: true\` (or the pushed branch). Then
+keep working. A failed run wakes you with the failing job, the step and a short log excerpt.
+Depending on the repository and the subscription, an all-green run also wakes you; that message means
+the work is done and it is time to finish. Use \`notify: "failures"\` when a green result should not
+interrupt you.
 
 ## When you must have the result before continuing
 
-\`ci_wait\` on the branch, commit or run. It blocks up to 900 seconds and returns the same compact
-summary. Do not use it for work you can do in parallel.
+The wait tool (\`ci.wait\` / \`ci_wait\`) on the branch, commit or run. It blocks up to 900 seconds and
+returns the same compact summary. Do not use it for work you can do in parallel.
 
 ## Reading the summary
 
 - \`✅\` success, \`❌\` failure, \`⏱️\` timed out, \`⊘\` cancelled, \`⏭️\` skipped, \`⏳\` running
-- \`r<number>\` is the workflow run id; use \`ci_log\` with it for more of the failing log.
+- \`r<number>\` is the workflow run id; use the log tool (\`ci.log\` / \`ci_log\`) with it for more of
+  the failing log.
 - The status line in \`<context key="ci">\` lists what this session watches and the latest result.
 
 ## Orchestrating merges on main
@@ -38,6 +42,6 @@ then watch \`sha\` to follow its workflow runs. Ignore the rest; nothing is subs
 
 ## Cleanup
 
-\`ci_unwatch\` with \`all: true\` when a branch no longer matters. Subscriptions expire after 24
-hours by default.
+The unwatch tool (\`ci.unwatch\` / \`ci_unwatch\`) with \`all: true\` when a branch no longer matters.
+Subscriptions expire after 24 hours by default.
 `

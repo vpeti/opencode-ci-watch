@@ -1,5 +1,12 @@
 import type { JobInfo, RunInfo, Target } from "./types.ts"
 
+function timestamp(run: RunInfo): number | undefined {
+  const value = run.updatedAt ?? run.createdAt ?? run.startedAt
+  if (!value) return undefined
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
 export type Include = "runs" | "pushes"
 export type NotifyMode = "failures" | "all" | "none"
 export type DeliveryMode = "queue" | "steer"
@@ -128,6 +135,7 @@ export class RunCache {
   }
 
   set(slug: string, run: RunInfo, now = Date.now()): void {
+    if (this.isStale(slug, run)) return
     this.runs.delete(this.key(slug, run.id))
     this.runs.set(this.key(slug, run.id), { run, at: now, slug })
     this.trim(now)
@@ -135,6 +143,21 @@ export class RunCache {
 
   get(slug: string, id: number): RunInfo | undefined {
     return this.runs.get(this.key(slug, id))?.run
+  }
+
+  /**
+   * True when `run` describes an older attempt (or an older snapshot of the same
+   * attempt) than the one already cached. A late webhook for attempt 1 must not
+   * overwrite — or be notified over — attempt 2.
+   */
+  isStale(slug: string, run: RunInfo): boolean {
+    const current = this.runs.get(this.key(slug, run.id))?.run
+    if (!current) return false
+    if (run.attempt < current.attempt) return true
+    if (run.attempt > current.attempt) return false
+    const incoming = timestamp(run)
+    const known = timestamp(current)
+    return incoming !== undefined && known !== undefined && incoming < known
   }
 
   forBranch(slug: string, branch: string, limit = 5): RunInfo[] {

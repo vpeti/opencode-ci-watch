@@ -46,7 +46,16 @@ function storage(): StorageLike {
   }
 }
 
-function harness(options: { recent?: () => Promise<ReturnType<typeof run>[]>; notifySuccess?: boolean; greenSettleMs?: number } = {}) {
+function harness(
+  options: {
+    recent?: () => Promise<ReturnType<typeof run>[]>
+    runsForSha?: () => Promise<ReturnType<typeof run>[]>
+    notifySuccess?: boolean
+    greenSettleMs?: number
+    settleMs?: number
+    now?: number
+  } = {},
+) {
   const config: Config = {
     ...baseConfig,
     notify: { ...baseConfig.notify, success: options.notifySuccess ?? false },
@@ -77,7 +86,7 @@ function harness(options: { recent?: () => Promise<ReturnType<typeof run>[]>; no
       return options.recent ? await options.recent() : []
     },
     async runsForSha() {
-      return []
+      return options.runsForSha ? await options.runsForSha() : []
     },
   } as unknown as Enricher
 
@@ -85,6 +94,7 @@ function harness(options: { recent?: () => Promise<ReturnType<typeof run>[]>; no
   const forwarder = {
     state: "stopped",
     lastError: undefined,
+    history: [],
     async start() {
       starts += 1
     },
@@ -94,23 +104,25 @@ function harness(options: { recent?: () => Promise<ReturnType<typeof run>[]>; no
   const changes: string[] = []
   const store = new SubscriptionStore(storage(), "acme/widgets")
   const jobs = new JobCache()
+  const cache = new RunCache()
   const service = new CiService({
     repo: { owner: "acme", name: "widgets", slug: "acme/widgets" },
     config,
     enricher,
     store,
-    cache: new RunCache(),
+    cache,
     jobs,
     defaultBranch: "main",
     notifier,
     forwarder,
     log: silent,
     currentBranch: async () => "main",
-    now: () => 1_000_000,
+    now: () => options.now ?? 1_000_000,
     greenSettleMs: options.greenSettleMs,
+    settleMs: options.settleMs,
     onStateChanged: (sessionID: string) => changes.push(sessionID),
   })
-  return { service, store, jobs, statuses, wakes, changes, starts: () => starts }
+  return { service, store, cache, jobs, statuses, wakes, changes, starts: () => starts }
 }
 
 test("watching starts the forwarder and writes the status entry", async () => {
@@ -454,4 +466,136 @@ test("a redelivered push wakes only once", async () => {
   await h.service.onDelivery(delivery)
 
   assert.equal(h.wakes.length, 1)
+})
+
+test("watching the same target merges includes instead of adding a second row", async () => {
+  const h = harness()
+  await h.service.watch("ses_1", { branch: "main", include: ["runs"] })
+  await h.service.watch("ses_1", { branch: "main", include: ["pushes"] })
+
+  assert.equal(h.store.size, 1)
+  assert.deepEqual(h.store.list()[0]?.include, ["runs", "pushes"])
+  assert.equal((await h.service.state("ses_1")).watches.length, 1)
+  assert.equal((h.statuses.get("ses_1") ?? "").match(/👀 main/g)?.length, 1)
+})
+
+test("startup collapses duplicate subscriptions left by older reloads", async () => {
+  const h = harness()
+  const base = {
+    repo: "acme/widgets",
+    sessionID: "ses_1",
+    target: { type: "branch" as const, value: "main" },
+    notify: "failures" as const,
+    delivery: "queue" as const,
+    createdAt: 1,
+    expiresAt: 2_000_000,
+  }
+  await h.store.save({ ...base, id: "first", include: ["runs"] })
+  await h.store.save({ ...base, id: "second", include: ["pushes"] })
+
+  await h.service.start()
+
+  assert.equal(h.store.size, 1)
+  assert.equal(h.store.list()[0]?.id, "first")
+  assert.deepEqual(h.store.list()[0]?.include, ["runs", "pushes"])
+  assert.equal((await h.service.state("ses_1")).watches.length, 1)
+})
+
+test("startup replays a terminal run that finished while the plugin was unloaded", async () => {
+  const h = harness({
+    recent: async () => [run({ id: 7101, conclusion: "failure", attempt: 1 })],
+  })
+  await h.store.save({
+    id: "sub",
+    repo: "acme/widgets",
+    sessionID: "ses_1",
+    target: { type: "branch", value: "main" },
+    include: ["runs"],
+    notify: "failures",
+    delivery: "queue",
+    createdAt: 1,
+    expiresAt: 2_000_000,
+  })
+
+  await h.service.start()
+
+  assert.equal(h.wakes.length, 1)
+  assert.match(h.wakes[0]!.text, /^❌/)
+  assert.match(h.wakes[0]!.text, /r7101/)
+})
+
+test("startup does not replay runs older than the replay window", async () => {
+  const now = Date.parse("2026-11-22T00:00:00Z")
+  const h = harness({
+    now,
+    recent: async () => [
+      run({
+        id: 7102,
+        conclusion: "failure",
+        attempt: 1,
+        createdAt: "2026-11-15T10:00:00Z",
+        updatedAt: "2026-11-15T10:02:00Z",
+      }),
+    ],
+  })
+  await h.store.save({
+    id: "old",
+    repo: "acme/widgets",
+    sessionID: "ses_1",
+    target: { type: "branch", value: "main" },
+    include: ["runs"],
+    notify: "failures",
+    delivery: "queue",
+    createdAt: Date.parse("2026-11-10T00:00:00Z"),
+    expiresAt: Date.parse("2026-12-01T00:00:00Z"),
+  })
+
+  await h.service.start()
+
+  assert.equal(h.wakes.length, 0)
+})
+
+test("a late failure from an older attempt is ignored after a newer attempt", async () => {
+  const h = harness()
+  await h.service.watch("ses_1", { branch: "main" })
+
+  const newer = normalizeDelivery(
+    "workflow_run",
+    workflowRunPayload({ id: 8101, run_attempt: 2, conclusion: "success", updated_at: "2026-11-20T10:05:00Z" }),
+  )
+  const older = normalizeDelivery(
+    "workflow_run",
+    workflowRunPayload({ id: 8101, run_attempt: 1, conclusion: "failure", updated_at: "2026-11-20T10:00:00Z" }),
+  )
+  assert.ok(newer && older)
+  await h.service.onDelivery(newer)
+  await h.service.onDelivery(older)
+
+  assert.equal(h.wakes.length, 0)
+  assert.equal(h.cache.get("acme/widgets", 8101)?.attempt, 2)
+})
+
+test("a pending wait is adopted after the plugin reloads", async () => {
+  const sha = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
+  let done = false
+  const first = harness({
+    runsForSha: async () => (done ? [run({ id: 9101, sha, conclusion: "success", attempt: 1 })] : []),
+  })
+  const pending = first.service.wait("ses_1", { sha, timeoutSeconds: 60 })
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  await first.service.stop()
+
+  done = true
+  const second = harness({
+    runsForSha: async () => [run({ id: 9101, sha, conclusion: "success", attempt: 1 })],
+    settleMs: 0,
+  })
+  await second.service.start()
+  const result = await Promise.race([
+    pending,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("wait did not resume")), 2_000)),
+  ])
+
+  assert.match(result.content, /✅/)
+  assert.match(result.content, /r9101/)
 })

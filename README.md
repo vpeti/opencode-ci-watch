@@ -79,7 +79,8 @@ Environment overrides for scripted use: `CI_WATCH_REPO`, `CI_WATCH_ACCOUNT`, `CI
 ## Tools
 
 Namespace `ci`. All targets accept exactly one of `branch`, `sha`, `run`, `current`; omitting them
-uses the current branch.
+uses the current branch. In Code Mode the same tools are called as `ci.watch`, `ci.unwatch`,
+`ci.status`, `ci.wait` and `ci.log`.
 
 | Tool | Use |
 | --- | --- |
@@ -97,10 +98,15 @@ How delivery works:
   workflow passed (a cancelled primary never counts), the signal that the work is done;
   `notify: "failures"` turns it into a status-line-only update
 - **push** → synthetic message, only for subscriptions with `include: ["pushes"]`
-- **forwarder broken** → one warning in the status line
+- **forwarder broken** → one warning in the status line, including the last recorded forwarder
+  transition
 
 Subscriptions live in plugin storage, survive restarts, and expire after 24 hours by default.
-They are per session, so an orchestrator and a subagent can watch different targets.
+They are per session, so an orchestrator and a subagent can watch different targets. Watching the
+same target twice merges the include modes into one subscription instead of adding a duplicate row.
+On reload, terminal runs from the last 24 hours (and no older than the subscription) are replayed
+once; older runs are ignored. A pending `ci_wait` is adopted by the new plugin instance instead of
+being cancelled.
 
 ## Transport
 
