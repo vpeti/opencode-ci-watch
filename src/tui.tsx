@@ -262,7 +262,16 @@ function Sidebar(props: { sessionID: string }) {
     const value = state()
     if (!value) return []
     return [...value.watches]
-      .filter((watch) => watch.target.type === "branch")
+      .filter((watch) => {
+        if (watch.target.type !== "branch") return false
+        // A child row is only useful while it needs attention. Finished
+        // subagent subscriptions stay in storage until they expire, but their
+        // notifications already carried the result, and listing them turns the
+        // sidebar into a history of the session.
+        if (watch.sessionTitle === undefined) return true
+        const state = overall(watch)
+        return state === "running" || state === "waiting" || state === "failed"
+      })
       .sort((left, right) => {
         // The viewed session's own watches come first; subagent rows follow.
         const leftChild = left.sessionTitle !== undefined
