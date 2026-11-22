@@ -14,6 +14,7 @@ import {
   renderRunLine,
   renderSuccess,
 } from "./render.ts"
+import type { SessionSummary } from "./sessions.ts"
 import type { DeliveryMode, Include, JobCache, NotifyMode, RunCache, Subscription, SubscriptionStore } from "./store.ts"
 import type { CiState } from "./state.ts"
 import type { Delivery, JobInfo, Logger, MergeInfo, PushInfo, RepoRef, RunInfo, Target } from "./types.ts"
@@ -618,9 +619,26 @@ export class CiService {
     }
   }
 
-  /** Snapshot for the TUI dashboard. Optional fields are omitted so the RPC schema validates. */
-  async state(sessionID: string): Promise<CiState> {
-    const watches = this.deps.store.bySession(sessionID).map((subscription) => {
+  /**
+   * Snapshot for the TUI dashboard. `descendants` are child sessions of the
+   * viewed one, so an orchestrator sees the targets its subagents watch.
+   * Optional fields are omitted so the RPC schema validates.
+   */
+  async state(sessionID: string, descendants: readonly SessionSummary[] = []): Promise<CiState> {
+    interface Scoped {
+      readonly subscription: Subscription
+      readonly sessionID?: string
+      readonly sessionTitle?: string
+    }
+    const scope: Scoped[] = [
+      ...this.deps.store.bySession(sessionID).map((subscription) => ({ subscription })),
+      ...descendants.flatMap((session) =>
+        this.deps.store
+          .bySession(session.id)
+          .map((subscription) => ({ subscription, sessionID: session.id, sessionTitle: session.title })),
+      ),
+    ]
+    const watches = scope.map(({ subscription, sessionID: owner, sessionTitle }) => {
       const runs = this.dashboardRuns(subscription.target)
       const primary = this.primaryRun(runs)
       const runStates = runs
@@ -646,6 +664,8 @@ export class CiService {
         notify: subscription.notify,
         merged: subscription.mergedAt !== undefined,
         ...(subscription.mergedAt !== undefined ? { mergedAt: subscription.mergedAt } : {}),
+        ...(owner ? { sessionID: owner } : {}),
+        ...(sessionTitle ? { sessionTitle } : {}),
         ...(primaryState ? { run: primaryState } : {}),
         runs: runStates,
         jobs,

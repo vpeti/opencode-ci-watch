@@ -156,6 +156,8 @@ the default branch, and exposes:
 `src/tui.tsx` renders a live CI section in the sidebar from `ci.state`:
 
 - one row per branch subscription, with the default branch pinned first and an aggregate state dot;
+- the viewed session's own watches first, then those of its child sessions (subagents), each child
+  row carrying the child session's title so the orchestrator can follow what it dispatched;
 - one row per workflow on the newest commit, with its own status icon (spinner while running) and
   timer, the primary workflow first and the others sorted by name; manual and scheduled workflows
   are left out because they do not react to a push;

@@ -351,6 +351,27 @@ test("unwatch notifies state observers", async () => {
   assert.equal((await h.service.state("ses_1")).watches.length, 0)
 })
 
+test("the dashboard includes the watches of child sessions", async () => {
+  const h = harness()
+  await h.service.watch("ses_1", { branch: "main" })
+  await h.service.watch("ses_child", { branch: "feature/login" })
+
+  const own = await h.service.state("ses_1")
+  assert.deepEqual(
+    own.watches.map((watch) => watch.target.value),
+    ["main"],
+  )
+
+  const scoped = await h.service.state("ses_1", [{ id: "ses_child", title: "S4: login" }])
+  assert.deepEqual(
+    scoped.watches.map((watch) => watch.target.value),
+    ["main", "feature/login"],
+  )
+  assert.equal(scoped.watches[1]?.sessionID, "ses_child")
+  assert.equal(scoped.watches[1]?.sessionTitle, "S4: login")
+  assert.equal(scoped.watches[0]?.sessionTitle, undefined)
+})
+
 test("the dashboard prefers a failed run over a newer skipped workflow", async () => {
   const h = harness()
   await h.service.watch("ses_1", { branch: "feature/login" })
