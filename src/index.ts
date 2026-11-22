@@ -17,6 +17,7 @@ import { CiService } from "./service.ts"
 import { SKILL_CONTENT, SKILL_DESCRIPTION, SKILL_ID, SKILL_NAME, SKILL_PATH } from "./skill.ts"
 import { pushDirectory } from "./shell.ts"
 import { DeliveryLedger, JobCache, RunCache, SubscriptionStore, type StorageLike } from "./store.ts"
+import { descendantSessions, type SessionListerLike } from "./sessions.ts"
 import { registerTools } from "./tools.ts"
 
 const EVENTS = ["push", "workflow_run", "workflow_job", "pull_request"] as const
@@ -186,7 +187,15 @@ export default Plugin.define({
 
     try {
       const registration = await ctx.rpc.register(CiRpc, {
-        state: async (input) => ci.state((input as { sessionID: string }).sessionID),
+        state: async (input) => {
+          const sessionID = (input as { sessionID: string }).sessionID
+          const descendants = await descendantSessions(
+            ctx.session as unknown as SessionListerLike,
+            sessionID,
+            logger,
+          )
+          return ci.state(sessionID, descendants)
+        },
       })
       emitState = (sessionID) => {
         void registration.events.emit("updated", { sessionID }).catch((error) => {

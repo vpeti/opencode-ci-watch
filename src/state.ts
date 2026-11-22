@@ -31,6 +31,10 @@ export interface CiWatchState {
   readonly notify: NotifyMode
   readonly merged: boolean
   readonly mergedAt?: number
+  /** Set when the subscription belongs to a child session rather than the viewed one. */
+  readonly sessionID?: string
+  /** The child session's title, so the dashboard can say whose watch it is. */
+  readonly sessionTitle?: string
   readonly run?: CiRunState
   readonly runs: readonly CiRunState[]
   readonly jobs: readonly CiJobState[]

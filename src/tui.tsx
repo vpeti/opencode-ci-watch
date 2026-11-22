@@ -141,6 +141,11 @@ function jobElapsed(job: CiJobState, at: number): string | undefined {
   return clock(at - started)
 }
 
+/** Keeps a child session's label short enough to leave the branch readable. */
+function shortTitle(title: string): string {
+  return title.length > 26 ? `${title.slice(0, 25)}…` : title
+}
+
 function WatchLine(props: { watch: CiWatchState }) {
   const context = usePlugin()
   const state = createMemo(() => overall(props.watch))
@@ -153,6 +158,13 @@ function WatchLine(props: { watch: CiWatchState }) {
       <text fg={context.theme.text.base} wrapMode="none" truncate flexGrow={1} flexShrink={1} minWidth={0}>
         <b>{props.watch.target.value}</b>
       </text>
+      <Show when={props.watch.sessionTitle}>
+        {(title: () => string) => (
+          <text fg={context.theme.text.faint} flexShrink={0}>
+            {shortTitle(title())}
+          </text>
+        )}
+      </Show>
     </box>
   )
 }
@@ -252,6 +264,10 @@ function Sidebar(props: { sessionID: string }) {
     return [...value.watches]
       .filter((watch) => watch.target.type === "branch")
       .sort((left, right) => {
+        // The viewed session's own watches come first; subagent rows follow.
+        const leftChild = left.sessionTitle !== undefined
+        const rightChild = right.sessionTitle !== undefined
+        if (leftChild !== rightChild) return leftChild ? 1 : -1
         const leftDefault = left.target.value === value.defaultBranch
         const rightDefault = right.target.value === value.defaultBranch
         return leftDefault === rightDefault ? 0 : leftDefault ? -1 : 1

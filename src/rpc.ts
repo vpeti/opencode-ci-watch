@@ -54,6 +54,8 @@ const watch = {
     notify: { type: "string", enum: ["failures", "all", "none"] },
     merged: { type: "boolean" },
     mergedAt: { type: "number" },
+    sessionID: { type: "string" },
+    sessionTitle: { type: "string" },
     run,
     runs: { type: "array", items: run },
     jobs: { type: "array", items: job },
