@@ -109,6 +109,30 @@ export function renderFailure(run: RunInfo, jobs: readonly JobInfo[], excerpt?: 
   return lines.join("\n")
 }
 
+/** A failed job, delivered before the rest of the workflow has finished. */
+export function renderJobFailure(
+  run: RunInfo,
+  job: JobInfo,
+  excerpt?: { text: string; job?: string; step?: string },
+): string {
+  const outcome =
+    job.conclusion === "timed_out" ? "timed out" : job.conclusion === "action_required" ? "needs approval" : "failed"
+  const header = [`❌ ${runTitle(run)} · r${run.id} · ${clip(job.name, 40)} ${outcome}`]
+  const elapsed = duration(run)
+  if (elapsed) header.push(elapsed)
+
+  const lines = [header.join(" · ")]
+  const fallbackStep = job.steps.find((step) => step.conclusion === "failure" || step.conclusion === "timed_out")
+  const step = excerpt?.step ?? fallbackStep?.name
+  lines.push(`✗ ${clip(job.name, 40)}${step ? ` · step "${clip(step, 48)}"` : ""}`)
+  if (excerpt?.text) {
+    for (const line of excerpt.text.split("\n")) lines.push(`  ${line}`)
+  }
+  if (run.conclusion === null) lines.push("⏳ workflow still running")
+  lines.push(`↳ gh run view ${run.id} --log-failed`)
+  return lines.join("\n")
+}
+
 export function renderPush(push: PushInfo): string {
   const sha = shortSha(push.after)
   if (push.deleted) return `🗑️ ${push.branch} · branch deleted by ${push.actor}`

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { isFailure, isSuccess, isTerminal, normalizeDelivery } from "../src/events.ts"
+import { isFailure, isJobFailure, isSuccess, isTerminal, normalizeDelivery } from "../src/events.ts"
 import { mergePayload, pushPayload, workflowJobPayload, workflowRunPayload } from "./helpers.ts"
 
 test("normalizes a workflow_run event", () => {
@@ -54,8 +54,26 @@ test("normalizes a workflow_job event", () => {
   assert.ok(delivery && delivery.kind === "job")
   assert.equal(delivery.job.id, 5001)
   assert.equal(delivery.job.runId, 1001)
+  assert.equal(delivery.job.runAttempt, 1)
+  assert.equal(delivery.job.runUrl, "https://api.github.com/repos/acme/widgets/actions/runs/1001")
   assert.equal(delivery.job.branch, "main")
   assert.equal(delivery.job.startedAt, "2026-11-20T10:00:05Z")
+})
+
+test("a failed job is a wake-up conclusion", () => {
+  const delivery = normalizeDelivery(
+    "workflow_job",
+    workflowJobPayload({ status: "completed", conclusion: "failure" }),
+  )
+  assert.ok(delivery && delivery.kind === "job")
+  assert.equal(isJobFailure(delivery.job), true)
+
+  const cancelled = normalizeDelivery(
+    "workflow_job",
+    workflowJobPayload({ status: "completed", conclusion: "cancelled" }),
+  )
+  assert.ok(cancelled && cancelled.kind === "job")
+  assert.equal(isJobFailure(cancelled.job), false)
 })
 
 test("normalizes a merged pull request", () => {

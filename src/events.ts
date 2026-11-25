@@ -83,9 +83,12 @@ function jobInfo(value: unknown): JobInfo | undefined {
   const id = num(job.id)
   if (id === undefined) return undefined
   const conclusion = str(job.conclusion) ?? null
+  const runUrl = str(job.run_url) ?? str(job.html_url)?.replace(/\/job\/\d+$/, "")
   return {
     id,
     runId: num(job.run_id),
+    runAttempt: num(job.run_attempt),
+    runUrl,
     branch: str(job.head_branch) ?? "",
     sha: str(job.head_sha) ?? "",
     name: str(job.name) ?? "job",
@@ -159,4 +162,9 @@ export function isFailure(run: RunInfo): boolean {
 
 export function isSuccess(run: RunInfo): boolean {
   return run.conclusion === "success"
+}
+
+/** A job conclusion the agent should be woken for before the workflow finishes. */
+export function isJobFailure(job: JobInfo): boolean {
+  return job.conclusion === "failure" || job.conclusion === "timed_out" || job.conclusion === "action_required"
 }

@@ -1,5 +1,5 @@
 import type { Subscription } from "./store.ts"
-import type { PushInfo, RunInfo, Target } from "./types.ts"
+import type { JobInfo, PushInfo, RunInfo, Target } from "./types.ts"
 
 export function targetKey(target: Target): string {
   return `${target.type}:${target.value.toLowerCase()}`
@@ -21,6 +21,22 @@ export function matchesRun(subscription: Subscription, run: RunInfo): boolean {
   if (target.type === "branch") return run.branch === target.value
   if (target.type === "sha") return sameSha(target.value, run.sha)
   return String(run.id) === target.value
+}
+
+/** Matches a job before the parent run is cached; the run supplies only fallbacks. */
+export function matchesJob(subscription: Subscription, job: JobInfo, run?: RunInfo): boolean {
+  if (!subscription.include.includes("runs")) return false
+  const target = subscription.target
+  if (target.type === "branch") {
+    const branch = job.branch || run?.branch || ""
+    return branch !== "" && branch === target.value
+  }
+  if (target.type === "sha") {
+    const sha = job.sha || run?.sha || ""
+    return sha !== "" && sameSha(target.value, sha)
+  }
+  const id = job.runId ?? run?.id
+  return id !== undefined && String(id) === target.value
 }
 
 export function matchesPush(subscription: Subscription, push: PushInfo): boolean {

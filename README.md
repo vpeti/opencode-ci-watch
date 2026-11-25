@@ -2,9 +2,10 @@
 
 An [OpenCode](https://opencode.ai) v2 plugin that turns GitHub Actions events into agent context.
 
-Agents watch CI on a branch, commit, or run. A failure wakes the session with the failing job and a
-trimmed log excerpt. A green run only updates a short status line. Nothing polls `gh` in a loop and
-no webhook exists while nobody is watching.
+Agents watch CI on a branch, commit, or run. A failed job wakes the session with the failing job and
+a trimmed log excerpt as soon as that job finishes, even while the rest of the workflow is still
+running. A green run only updates a short status line. Nothing polls `gh` in a loop and no webhook
+exists while nobody is watching.
 
 ```
 ⤴️ main · a1b2c3d · 3 commits · alice "fix: retry backoff"
@@ -92,8 +93,10 @@ uses the current branch. In Code Mode the same tools are called as `ci.watch`, `
 
 How delivery works:
 
-- **failure** → synthetic message, waking an idle session (queued after the current step by
-  default; `delivery: "steer"` injects into it)
+- **failure** → synthetic message as soon as a job fails, without waiting for the rest of the
+  workflow; one wake per subscription and run attempt, and the terminal run does not wake again
+  for the same attempt (queued after the current step by default; `delivery: "steer"` injects into
+  it)
 - **success** → one synthetic message once every workflow on the head has finished and the primary
   workflow passed (a cancelled primary never counts), the signal that the work is done;
   `notify: "failures"` turns it into a status-line-only update
