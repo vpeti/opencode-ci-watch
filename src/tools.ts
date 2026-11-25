@@ -60,8 +60,9 @@ export async function registerTools(ctx: Plugin.Context, service: CiService): Pr
     editor.add({
       name: "watch",
       description:
-        "Subscribe this session to CI for a branch, commit or run. A failed run wakes you with the failing job " +
-        "and a log excerpt; a green run only updates the status line (unless `notify: all`). Call it after pushing. " +
+        "Subscribe this session to CI for a branch, commit or run. A failed job wakes you as soon as it " +
+        "finishes, with the step and a log excerpt, without waiting for the rest of the workflow; a green run " +
+        "only updates the status line (unless `notify: all`). Call it after pushing. " +
         "For an orchestrator watching merges, watch the branch with `include: [\"pushes\"]`, read the sha from the " +
         `notification, then watch \`sha\` only for the merges you care about. ${TARGETS}`,
       input: {
@@ -76,7 +77,7 @@ export async function registerTools(ctx: Plugin.Context, service: CiService): Pr
           notify: {
             type: "string",
             enum: ["failures", "all", "none"],
-            description: "`failures` (default) wakes you when a run fails; `all` also on success; `none` only updates the status line.",
+            description: "`failures` (default) wakes you when a job fails; `all` also on success; `none` only updates the status line.",
           },
           delivery: {
             type: "string",

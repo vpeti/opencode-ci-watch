@@ -35,6 +35,8 @@ export interface JobStep {
 export interface JobInfo {
   readonly id: number
   readonly runId?: number
+  readonly runAttempt?: number
+  readonly runUrl?: string
   readonly branch?: string
   readonly sha?: string
   readonly name: string

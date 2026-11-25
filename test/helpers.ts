@@ -78,6 +78,8 @@ export function workflowJobPayload(overrides: Record<string, unknown> = {}) {
     workflow_job: {
       id: 5001,
       run_id: 1001,
+      run_attempt: 1,
+      run_url: "https://api.github.com/repos/acme/widgets/actions/runs/1001",
       name: "test",
       head_branch: "main",
       head_sha: "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",

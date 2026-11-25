@@ -1,14 +1,15 @@
 import { randomUUID } from "node:crypto"
 import type { Config } from "./config.ts"
-import { isFailure, isTerminal, isSuccess } from "./events.ts"
+import { isFailure, isJobFailure, isTerminal, isSuccess } from "./events.ts"
 import type { Enricher } from "./github/enrich.ts"
 import type { Forwarder } from "./forwarder.ts"
 import { errorMessage } from "./log.ts"
-import { describeTarget, matchesPush, matchesRun, targetKey, targetMatchesDelivery } from "./match.ts"
+import { describeTarget, matchesJob, matchesPush, matchesRun, targetKey, targetMatchesDelivery } from "./match.ts"
 import type { Notifier } from "./notify.ts"
 import {
   conclusionEmoji,
   renderFailure,
+  renderJobFailure,
   renderJobs,
   renderPush,
   renderRunLine,
@@ -1006,6 +1007,94 @@ export class CiService {
     }
     for (const sessionID of sessions) await this.refreshStatus(sessionID)
     for (const sessionID of sessions) this.changed(sessionID)
+    if (isJobFailure(job)) await this.notifyJobFailure(job)
+  }
+
+  /**
+   * Wakes a watcher as soon as a job fails instead of waiting for the rest of the
+   * workflow. The first failure in a run attempt claims the failure keys that
+   * `onRun` would use, so the terminal run event does not wake the session again.
+   */
+  private async notifyJobFailure(job: JobInfo): Promise<void> {
+    // Do not fetch a run or its log for a job no subscription follows.
+    const candidates = this.deps.store.list().filter((subscription) => matchesJob(subscription, job))
+    if (candidates.length === 0) return
+
+    let run = job.runId !== undefined ? this.deps.cache.get(this.slug, job.runId) : undefined
+    if (run && job.runAttempt !== undefined && job.runAttempt < run.attempt) return
+    if (job.runId !== undefined && (!run || (job.runAttempt !== undefined && run.attempt !== job.runAttempt))) {
+      run = await this.deps.enricher.run(job.runId).catch((error) => {
+        this.deps.log.warn("cannot read the run for a failed job", { run: job.runId, error: errorMessage(error) })
+        return undefined
+      })
+      if (run) this.deps.cache.set(this.slug, run, this.now)
+    }
+    if (run && job.runAttempt !== undefined && run.attempt !== job.runAttempt) {
+      this.deps.log.info("ignored a failed job from an older attempt", {
+        id: job.id,
+        attempt: job.runAttempt,
+        current: run.attempt,
+      })
+      return
+    }
+    if (run && isTerminal(run) && isSuccess(run)) return
+
+    const parent = run ?? this.fallbackRun(job)
+    if (!parent) return
+    const targets: Subscription[] = []
+    for (const subscription of candidates) {
+      if (!(await this.claimFailure(subscription, parent))) continue
+      if (subscription.notify === "none") continue
+      if (this.isSuppressed(subscription.sessionID, subscription.target)) continue
+      targets.push(subscription)
+    }
+    if (targets.length === 0) return
+
+    let message: string
+    try {
+      const excerpt = await this.deps.enricher.failedLog(parent.id, job.id, this.deps.config.maxLogChars)
+      message = renderJobFailure(parent, job, excerpt.text ? excerpt : undefined)
+    } catch (error) {
+      this.deps.log.warn("cannot read the failed job log", {
+        run: parent.id,
+        job: job.id,
+        error: errorMessage(error),
+      })
+      message = renderJobFailure(parent, job)
+    }
+    for (const subscription of targets) {
+      await this.deps.notifier.wake(subscription.sessionID, message, subscription.delivery)
+    }
+  }
+
+  /** A minimal parent run when the job arrives before `workflow_run` is cached. */
+  private fallbackRun(job: JobInfo): RunInfo | undefined {
+    if (job.runId === undefined) return undefined
+    return {
+      id: job.runId,
+      name: "workflow",
+      branch: job.branch ?? "",
+      sha: job.sha ?? "",
+      event: "unknown",
+      status: "in_progress",
+      conclusion: null,
+      attempt: job.runAttempt ?? 1,
+      url: job.runUrl ?? "",
+      pullRequests: [],
+    }
+  }
+
+  /**
+   * Claims every conclusion key a terminal failing run could use. A job
+   * conclusion does not always equal the run conclusion (`timed_out` versus
+   * `failure`), so claiming one key is not enough to suppress the later wake.
+   */
+  private async claimFailure(subscription: Subscription, run: RunInfo): Promise<boolean> {
+    let claimed = false
+    for (const conclusion of ["failure", "timed_out", "action_required"]) {
+      if (await this.seen(`run:${subscription.id}:${run.id}:${run.attempt}:${conclusion}`)) claimed = true
+    }
+    return !claimed
   }
 
   private async onMerge(merge: MergeInfo): Promise<void> {

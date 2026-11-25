@@ -50,6 +50,7 @@ function harness(
   options: {
     recent?: () => Promise<ReturnType<typeof run>[]>
     runsForSha?: () => Promise<ReturnType<typeof run>[]>
+    run?: (id: number) => Promise<ReturnType<typeof run> | undefined>
     notifySuccess?: boolean
     greenSettleMs?: number
     settleMs?: number
@@ -79,8 +80,8 @@ function harness(
     async failedLog() {
       return { text: "error[E0308]: mismatched types", job: "test", step: "cargo test" }
     },
-    async run() {
-      return run()
+    async run(id: number) {
+      return options.run ? await options.run(id) : run()
     },
     async recentRuns() {
       return options.recent ? await options.recent() : []
@@ -146,6 +147,181 @@ test("a failed run wakes the session with the failing job and log", async () => 
   assert.match(h.wakes[0]!.text, /^❌ ci main · r1001 · 1\/2 jobs failed/)
   assert.match(h.wakes[0]!.text, /step "cargo test"/)
   assert.match(h.wakes[0]!.text, /error\[E0308\]/)
+})
+
+test("a failed job wakes before the rest of the workflow finishes", async () => {
+  const h = harness()
+  await h.service.watch("ses_1", { branch: "main" })
+
+  const running = normalizeDelivery(
+    "workflow_run",
+    workflowRunPayload({ status: "in_progress", conclusion: null, updated_at: "2026-11-20T10:01:00Z" }),
+  )
+  const failed = normalizeDelivery(
+    "workflow_job",
+    workflowJobPayload({
+      action: "completed",
+      status: "completed",
+      conclusion: "failure",
+      completed_at: "2026-11-20T10:01:30Z",
+      steps: [
+        { name: "checkout", conclusion: "success" },
+        { name: "cargo test", conclusion: "failure" },
+      ],
+    }),
+  )
+  assert.ok(running && failed)
+  await h.service.onDelivery(running)
+  await h.service.onDelivery(failed)
+
+  assert.equal(h.wakes.length, 1)
+  assert.match(h.wakes[0]!.text, /^❌ ci main · r1001 · test failed/)
+  assert.match(h.wakes[0]!.text, /step "cargo test"/)
+  assert.match(h.wakes[0]!.text, /error\[E0308\]/)
+
+  // The terminal run event must not wake a second time for the same attempt.
+  const completed = normalizeDelivery("workflow_run", workflowRunPayload({ conclusion: "failure" }))
+  assert.ok(completed)
+  await h.service.onDelivery(completed)
+  assert.equal(h.wakes.length, 1)
+})
+
+test("only the first failed job in a run wakes the session", async () => {
+  const h = harness()
+  await h.service.watch("ses_1", { branch: "main" })
+  const running = normalizeDelivery(
+    "workflow_run",
+    workflowRunPayload({ status: "in_progress", conclusion: null }),
+  )
+  assert.ok(running)
+  await h.service.onDelivery(running)
+
+  const first = normalizeDelivery(
+    "workflow_job",
+    workflowJobPayload({ action: "completed", status: "completed", conclusion: "failure" }),
+  )
+  const second = normalizeDelivery(
+    "workflow_job",
+    workflowJobPayload({
+      action: "completed",
+      id: 5002,
+      name: "lint",
+      status: "completed",
+      conclusion: "failure",
+    }),
+  )
+  assert.ok(first && second)
+  await h.service.onDelivery(first)
+  await h.service.onDelivery(second)
+
+  assert.equal(h.wakes.length, 1)
+  assert.match(h.wakes[0]!.text, /test failed/)
+})
+
+test("a failed job on an uncached run still wakes with the job detail", async () => {
+  const h = harness({ run: async (id) => run({ id, status: "in_progress", conclusion: null }) })
+  await h.service.watch("ses_1", { branch: "main" })
+
+  const failed = normalizeDelivery(
+    "workflow_job",
+    workflowJobPayload({ action: "completed", status: "completed", conclusion: "failure" }),
+  )
+  assert.ok(failed)
+  await h.service.onDelivery(failed)
+
+  assert.equal(h.wakes.length, 1)
+  assert.match(h.wakes[0]!.text, /^❌ ci main · r1001 · test failed/)
+})
+
+test("a failed job from an older attempt does not wake", async () => {
+  const h = harness()
+  await h.service.watch("ses_1", { branch: "main" })
+
+  const current = normalizeDelivery(
+    "workflow_run",
+    workflowRunPayload({ run_attempt: 2, status: "in_progress", conclusion: null }),
+  )
+  const old = normalizeDelivery(
+    "workflow_job",
+    workflowJobPayload({ run_attempt: 1, action: "completed", status: "completed", conclusion: "failure" }),
+  )
+  assert.ok(current && old)
+  await h.service.onDelivery(current)
+  await h.service.onDelivery(old)
+
+  assert.equal(h.wakes.length, 0)
+})
+
+test("a failed job does not wake a pushes-only watch", async () => {
+  const h = harness()
+  await h.service.watch("ses_1", { branch: "main", include: ["pushes"] })
+
+  const failed = normalizeDelivery(
+    "workflow_job",
+    workflowJobPayload({ action: "completed", status: "completed", conclusion: "failure" }),
+  )
+  assert.ok(failed)
+  await h.service.onDelivery(failed)
+
+  assert.equal(h.wakes.length, 0)
+})
+
+test("a failed job on another branch does not wake", async () => {
+  const h = harness()
+  await h.service.watch("ses_1", { branch: "feature/login" })
+
+  const failed = normalizeDelivery(
+    "workflow_job",
+    workflowJobPayload({ action: "completed", status: "completed", conclusion: "failure", head_branch: "main" }),
+  )
+  assert.ok(failed)
+  await h.service.onDelivery(failed)
+
+  assert.equal(h.wakes.length, 0)
+})
+
+test("notify: none keeps a failed job to the status line", async () => {
+  const h = harness({ run: async (id) => run({ id, status: "in_progress", conclusion: null }) })
+  await h.service.watch("ses_1", { branch: "main", notify: "none" })
+
+  const failed = normalizeDelivery(
+    "workflow_job",
+    workflowJobPayload({ action: "completed", status: "completed", conclusion: "failure" }),
+  )
+  assert.ok(failed)
+  await h.service.onDelivery(failed)
+
+  assert.equal(h.wakes.length, 0)
+})
+
+test("a failed job does not wake a session that is already waiting", async () => {
+  const h = harness({ settleMs: 0 })
+  await h.service.watch("ses_1", { branch: "main" })
+  const pending = h.service.wait("ses_1", { branch: "main", timeoutSeconds: 60 })
+  await new Promise((resolve) => setTimeout(resolve, 5))
+
+  const running = normalizeDelivery(
+    "workflow_run",
+    workflowRunPayload({ status: "in_progress", conclusion: null }),
+  )
+  const failed = normalizeDelivery(
+    "workflow_job",
+    workflowJobPayload({ action: "completed", status: "completed", conclusion: "failure" }),
+  )
+  assert.ok(running && failed)
+  await h.service.onDelivery(running)
+  await h.service.onDelivery(failed)
+  assert.equal(h.wakes.length, 0)
+
+  const completed = normalizeDelivery("workflow_run", workflowRunPayload({ conclusion: "failure" }))
+  assert.ok(completed)
+  await h.service.onDelivery(completed)
+  const result = await Promise.race([
+    pending,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("wait did not resume")), 2_000)),
+  ])
+  assert.match(result.content, /❌/)
+  assert.equal(h.wakes.length, 0)
 })
 
 test("the same run is only delivered once", async () => {
